@@ -10,8 +10,20 @@ if [ ! -f "$1" ]; then
     exit 1
 fi
 
+line_array=()
+mapfile -t line_array < $1
+
+function is_whitespace() {
+    local line="$1"
+    [[ "$line" =~ ^[[:space:]]*$ ]]
+}
+
 code_array=()
-mapfile -t code_array < $1
+for line in "${line_array[@]}"; do
+    if ! is_whitespace "$line"; then
+	code_array+=("$line")
+    fi
+done
 
 
 ###################################################################
@@ -135,12 +147,23 @@ exitprog() {
 }
 
 syscall() {
-    case $rdi in
-	1)
-	    echo `read_text "$rsi"`
+    case $rax in
+	1) # Write Syscall
+	    case $rdi in
+		1)    
+		    echo `read_text "$rsi"`
+		    ;;
+		*)
+		    echo "Error: unsupported filedescriptor for write syscall"
+		    exit 1
+		    ;;
+	    esac
+	    ;;
+	60) # Exit Syscall
+	    exit $rdi
 	    ;;
 	*)
-	    echo "Error: Unknown syscall $rdi."
+	    echo "Error: Unknown syscall $rax."
 	    exit 1
 	    ;;
     esac
