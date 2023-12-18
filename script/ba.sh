@@ -272,7 +272,6 @@ main() {
     ip=`find_label "START:"`
     while true; do
 	code=`load_code "$ip"`
-	echo $code
 	execute "$code"
 	((ip++))
     done
