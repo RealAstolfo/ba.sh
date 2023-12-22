@@ -27,6 +27,95 @@ for line in "${line_array[@]}"; do
 done
 
 ###################################################################
+# TOKEN TYPES
+###################################################################
+declare -A token_types
+
+token_types["TOKEN_INVALID"]=-1 # placeholder value
+token_types["TOKEN_BLOCK"]=-2   # used for storage management
+token_types["TOKEN_FREE"]=-3    # free token marker, use to catch leaks
+
+# Single-character operators.
+token_types["TOKEN_WHITESPACE"]=' '
+token_types["TOKEN_BOOL_NOT"]='!'
+token_types["TOKEN_AND"]='&'
+token_types["TOKEN_OR"]='|'
+token_types["TOKEN_XOR"]='^'
+token_types["TOKEN_NOT"]='~'
+token_types["TOKEN_MULT"]='*'
+token_types["TOKEN_DIV"]='/'
+token_types["TOKEN_MOD"]='%'
+token_types["TOKEN_LPAR"]='('
+token_types["TOKEN_RPAR"]=')'
+token_types["TOKEN_PLUS"]='+'
+token_types["TOKEN_MINUS"]='-'
+token_types["TOKEN_COMMA"]=','
+token_types["TOKEN_LBRACE"]='{'
+token_types["TOKEN_RBRACE"]='}'
+token_types["TOKEN_LBRACKET"]='['
+token_types["TOKEN_RBRACKET"]=-']'
+token_types["TOKEN_QMARK"]='?'
+token_types["TOKEN_EQ"]='=' # = or ==
+token_types["TOKEN_GT"]='>'
+token_types["TOKEN_LT"]='<'
+
+# Multi-character operators.
+token_types["TOKEN_SHL"]='<<' # << or <<<
+token_types["TOKEN_SHR"]=-'>>'
+token_types["TOKEN_SAR"]='>>>'
+token_types["TOKEN_SDIV"]='//'
+token_types["TOKEN_SMOD"]='%%'
+token_types["TOKEN_GE"]='>='
+token_types["TOKEN_LE"]='<='
+token_types["TOKEN_NE"]='!=' # != or <>
+token_types["TOKEN_LEG"]='<=>'
+token_types["TOKEN_DBL_AND"]='&&'
+token_types["TOKEN_DBL_OR"]='||'
+token_types["TOKEN_DBL_XOR"]='^^'
+
+
+token_types['TOKEN_NUM']='number' # numeric constant
+token_types['TOKEN_ERRNUM']='badnumber' # malformed numeric constant
+token_types['TOKEN_STR']='string' # string constant
+token_types['TOKEN_ERRSTR']='badstring' # unterminated string constant
+token_types['TOKEN_ID']='identity' # identifier
+token_types['TOKEN_FLOAT']='float' # floating-point constant
+token_types['TOKEN_HERE']='$' # $, not '$' because it is not an operator
+token_types['TOKEN_BASE']='$$'
+
+
+# Tokens for the assembler
+token_types['TOKEN_SEG']='segment'
+token_types['TOKEN_WRT']='wrt'
+token_types['TOKEN_FLOATIZE']='__?floatX?__'
+token_types['TOKEN_STRFUNC']='__utf16*__ __utf32*__'
+token_types['TOKEN_IFUNC']='__ilog2*__'
+token_types['TOKEN_DECORATOR']='decoration' # decorators such as {...}
+token_types['TOKEN_OPMASK']='opmask' # translated token for opmask registers
+token_types['TOKEN_SIZE']='bytesize' # BYTE WORD DWORD QWORD etc
+token_types['TOKEN_SPECIAL']='special' # REL FAR NEAR STRICT NOSPLIT etc
+token_types['TOKEN_PREFIX']='prefix' # A32 O16 LOCK REPNZ TIMES etc
+token_types['TOKEN_REG']='register' # register name
+token_types['TOKEN_INSN']=-'instruction' # instruction name
+
+token_types['TOKEN_OTHER']='unimplemented' # % sequence without (current) meaning
+token_types['TOKEN_PREPROC_ID']='%symbol' # Preprocessor ID eg. %symbol
+token_types['TOKEN_MMACRO_PARAM']='macro' # MMacro paramater eg. $1
+token_types['TOKEN_LOCAL_SYMBOL']='lsymbol' # Local symbol, eg. %%symbol
+token_types['TOKEN_LOCAL_MACRO']=-'lmacro' # Local macro, eg %$symbol
+token_types['TOKEN_ENVIRON']='%!'
+token_types['TOKEN_INTERNAL_STR']='istring' # Unquoted string that should remain so
+token_types['TOKEN_NAKED_STR']='nstring' # Unquoted string that should be requoted
+token_types['TOKEN_PREPROC_Q']='%?'
+token_types['TOKEN_PREPROC_QQ']=-'%??'
+token_types['TOKEN_PREPROC_SQ']=-'%*?'
+token_types['TOKEN_PREPROC_SQQ']='%*??'
+token_types['TOKEN_PASTE']='%+'
+token_types['TOKEN_COND_COMMA']='%,'
+token_types["TOKEN_INDIRECT"]='%[...]'
+token_types["TOKEN_XDEF_PARAM"]='%xdefine' # Used during %xdefine processing
+
+###################################################################
 # OPS
 ###################################################################
 function call() {
