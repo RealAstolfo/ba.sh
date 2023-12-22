@@ -222,15 +222,13 @@ function load_code() {
     echo `parse_line "${code_array[$1]}"`
 }
 
-is_register() {
-    case $1 in
-	"rdi" | "rsi" | "rdx" | "r15" | "rax" | "zf" | "ip")
-	    return 0 # Success (true)
-	    ;;
-	*)
-	    return 1 # Failure (false)
-B	    ;;
-    esac    
+function is_register() {
+    for reg in ${valid_registers[@]}; do
+	if [ "$1" == "$reg" ]; then
+	    return 0
+	fi
+    done
+    return 1
 }
 
 read_register() {
@@ -254,38 +252,29 @@ set_register() {
     exit 1
 }
 
+function is_label() {
+    if [[ $1 =~ ^[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
+	return 0
+    else
+	return 1
+    fi
+}
 
-execute() {
+function execute() {
     IFS=' ' read -ra components <<< $1
-    case ${components[0]} in
-	*"mov"*)
-	    mov ${components[1]}
-	    ;;
-	*":"*)
-	    ;;
-	*"syscall"*)
-	    syscall ${components[1]}
-	    ;;
-	*"call"*)
-	    call ${components[1]}
-	    ;;
-	*"dec"*)
-	    dec ${components[1]}
-	    ;;
-	*"jnz"*)
-	    jnz ${components[1]}
-	    ;;
-	*"jmp"*)
-	    jmp ${components[1]}
-	    ;;
-	*"xor"*)
-	    xor ${components[1]}
-	    ;;
-	*)
-	    echo "Error: Unknown operation ${components[0]}."
-	    exit 1
-    esac
-    return 0
+    if is_label "${components[0]}"; then
+	return 0
+    fi
+    
+    for inst in ${registered_instructions[@]}; do
+	if [ "${components[0]}" == "$inst" ]; then
+	    $inst ${components[1]}
+	    return 0
+	fi
+    done
+
+    echo "Unknown operation ${components[0]}."
+    return 1
 }
 
 read_text() {
