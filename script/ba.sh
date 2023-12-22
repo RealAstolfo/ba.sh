@@ -10,6 +10,7 @@ if [ ! -f "$1" ]; then
     exit 1
 fi
 
+
 line_array=()
 mapfile -t line_array < $1
 
@@ -25,19 +26,150 @@ for line in "${line_array[@]}"; do
     fi
 done
 
+###################################################################
+# OPS
+###################################################################
+function call() {
+    if [[ "$1" == "exit" ]]; then
+	exitprog
+    fi
+}
+
+
+function exitprog() {
+    exit $rdi
+}
+
+function syscall() {
+    case $rax in
+	1) # Write Syscall
+	    case $rdi in
+		1)    
+		    echo `read_text "$rsi"`
+		    ;;
+		*)
+		    echo "Error: unsupported filedescriptor for write syscall"
+		    exit 1
+		    ;;
+	    esac
+	    ;;
+	60) # Exit Syscall
+	    exit $rdi
+	    ;;
+	*)
+	    echo "Error: Unknown syscall $rax."
+	    exit 1
+	    ;;
+    esac
+    return 0
+}
+
+function mov() {
+    IFS=',' read -ra components <<< $1
+
+    local register
+    local value
+    if is_register ${components[0]}; then
+	register=${components[0]}
+    else
+	echo "Unknown register ${components[0]}"
+	exit 1
+    fi
+    
+    if is_register ${components[1]}; then
+	value=`read_register "${components[1]}"`
+    else
+	value=${components[1]}
+    fi
+
+    set_register "$register" "$value"
+
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+	zf=0
+	return 0
+    fi
+    
+    
+    if [ "$value" -eq 0 ]; then
+	zf=1
+    else
+	zf=0
+    fi
+}
+
+function jnz() {
+    if [ $zf -eq 0 ]; then
+	 jmp $1
+    fi
+}
+
+function jmp() {
+    ip=`find_label $1:`
+}
+
+function dec() {
+    (($1--))
+    local value=`read_register $1`
+    if [ "$value" -eq 0 ]; then
+	zf=1
+    else
+	zf=0
+    fi
+}
+
+function xor() {
+    IFS=',' read -ra components <<< $1
+
+    local register
+    local value
+    local value_a
+    local value_b
+    if is_register ${components[0]}; then
+	register=${components[0]}
+	value_a=`read_register "${components[0]}"`
+    else
+	echo "Unknown register ${components[0]}"
+	exit 1
+    fi
+    
+    if is_register ${components[1]}; then
+	value_b=`read_register "${components[1]}"`
+    else
+	value_b=${components[1]}
+    fi
+    value=$(((value_a & ~value_b) | (~value_a & value_b)))
+    
+    set_register "$register" "$value"
+    if [ "$value" -eq 0 ]; then
+	zf=1
+    else
+	zf=0
+    fi
+}
 
 ###################################################################
 # REGISTERS
 ###################################################################
-rdi=0
-rsi=0
-rdx=0
-r15=0
-rax=0
-# zero flag
-zf=0
-# instruction pointer
-ip=0
+valid_registers=("rdi" "rsi" "rdx" "r15" "rax" "zf" "ip")
+
+# zeroize the registers
+for reg in ${valid_registers[@]}; do
+    declare "${reg}=0"
+done
+
+###################################################################
+# INSTRUCTIONS
+###################################################################
+registered_instructions=("mov" "syscall" "call" "dec" "jnz" "jmp" "xor")
+
+
+for func in ${registered_instructions[@]}; do
+    if [ "$(type -t "$func")" == "function" ]; then
+	continue
+    else
+	echo "Function implementation of $func does not exist"
+    fi
+done
 
 ###################################################################
 # HELPER
@@ -52,8 +184,42 @@ function find_char() {
     return 1
 }
 
+# See 
+function isidstart() {
+    case "$1" in
+	[[:alpha:]] | '_' | '.' | '?' | '@' )
+	    return 0 ;; # True
+	*)
+	    return 1 ;; # False
+    esac
+}
+
+# See nasmlib.c#L708
+#function stdscan() {
+    #remove whitespace from front
+#    str="$1"
+#    str="${str#"${str%%[![:space:]]*}"}"
+#    if [[ "$str" == $'\n' ]]; then
+#	echo "0" # means t_type = 0
+#    fi
+    #L720
+#    if isidstart "${str:0:1}" || [[ "${str:0:1}" == '$' && isidstart "${str:1:1}" ]]; then
+#	local is_sym=false
+#	if [ "${str:0:1}" == '$' ]; then
+#	    is_sym=true
+#	    str="${str:1}"
+#	fi	
+#   fi   
+#}
+
+function parse_line() {
+    str="$1"
+    str="${str#"${str%%[![:space:]]*}"}"
+    echo $str
+}
+
 function load_code() {
-    echo "${code_array[$1]}"
+    echo `parse_line "${code_array[$1]}"`
 }
 
 is_register() {
@@ -132,126 +298,6 @@ read_text() {
     return 0
 }
 
-###################################################################
-# OPS
-###################################################################
-call() {
-    if [[ "$1" == "exit" ]]; then
-	exitprog
-    fi
-}
-
-
-exitprog() {
-    exit $rdi
-}
-
-syscall() {
-    case $rax in
-	1) # Write Syscall
-	    case $rdi in
-		1)    
-		    echo `read_text "$rsi"`
-		    ;;
-		*)
-		    echo "Error: unsupported filedescriptor for write syscall"
-		    exit 1
-		    ;;
-	    esac
-	    ;;
-	60) # Exit Syscall
-	    exit $rdi
-	    ;;
-	*)
-	    echo "Error: Unknown syscall $rax."
-	    exit 1
-	    ;;
-    esac
-    return 0
-}
-
-mov() {
-    IFS=',' read -ra components <<< $1
-
-    local register
-    local value
-    if is_register ${components[0]}; then
-	register=${components[0]}
-    else
-	echo "Unknown register ${components[0]}"
-	exit 1
-    fi
-    
-    if is_register ${components[1]}; then
-	value=`read_register "${components[1]}"`
-    else
-	value=${components[1]}
-    fi
-
-    set_register "$register" "$value"
-
-    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-	zf=0
-	return 0
-    fi
-    
-    
-    if [ "$value" -eq 0 ]; then
-	zf=1
-    else
-	zf=0
-    fi
-}
-
-function jnz() {
-    if [ $zf -eq 0 ]; then
-	 jmp $1
-    fi
-}
-
-function jmp() {
-    ip=`find_label $1:`
-}
-
-dec() {
-    (($1--))
-    local value=`read_register $1`
-    if [ "$value" -eq 0 ]; then
-	zf=1
-    else
-	zf=0
-    fi
-}
-
-xor() {
-    IFS=',' read -ra components <<< $1
-
-    local register
-    local value
-    local value_a
-    local value_b
-    if is_register ${components[0]}; then
-	register=${components[0]}
-	value_a=`read_register "${components[0]}"`
-    else
-	echo "Unknown register ${components[0]}"
-	exit 1
-    fi
-    
-    if is_register ${components[1]}; then
-	value_b=`read_register "${components[1]}"`
-    else
-	value_b=${components[1]}
-    fi
-    value=$(((value_a & ~value_b) | (~value_a & value_b)))
-    
-    set_register "$register" "$value"
-    if [ "$value" -eq 0 ]; then
-	zf=1
-    else
-	zf=0
-    fi
-}
 
 find_label() {
     local line_number=0
