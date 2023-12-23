@@ -19,12 +19,61 @@ function is_whitespace() {
     [[ "$line" =~ ^[[:space:]]*$ ]]
 }
 
-code_array=()
-for line in "${line_array[@]}"; do
-    if ! is_whitespace "$line"; then
-	code_array+=("$line")
+function skip_space() {
+    str=$1
+    str="${str#"${str%%[![:space:]]*}"}" # Skip whitespace
+    echo $str
+}
+
+function is_include() {
+    str=$1
+    str=`skip_space "$str"`
+    if [[ $1 == "%include"* ]]; then
+	echo "${2//\"/}" # strip quote literals
+	return 0
     fi
-done
+    return 1
+}
+
+declare -A asm_defines
+function is_define() {
+    str=$1
+    str=`skip_space "$str"`
+    if [[ $1 == "%define"* ]]; then
+	asm_defines[$2]=$3
+	return 0
+    fi
+    return 1
+}
+
+code_array=()
+
+function read_assembly() {
+    local line_array=()
+    mapfile -t line_array < $1
+    for line in "${line_array[@]}"; do
+	file=`is_include $line`
+	if [ $? -eq 0 ]; then
+	    read_assembly $file
+	    continue
+	fi
+	if is_define $line; then
+	    continue
+	fi
+	# preprocess the defines found in the source.
+	for key in "${!asm_defines[@]}"; do
+	    value="${asm_defines[$key]}"
+	    line="${line//$key/$value}"
+	done
+
+	if ! is_whitespace "$line"; then
+	    code_array+=("$line")
+	fi
+    done
+}
+
+# load first file
+read_assembly $1
 
 ###################################################################
 # TOKEN TYPES
@@ -265,11 +314,11 @@ done
 ###################################################################
 function parse_line() {
     str="$1"
-    str="${str#"${str%%[![:space:]]*}"}" # Skip whitespace
+    str=`skip_space "$str"`
     if [[ $str == '\n' ]]; then
 	return 0
     fi
-    echo str
+    echo $str
 }
 
 function load_code() {
@@ -307,7 +356,7 @@ set_register() {
 }
 
 function is_label() {
-    if [[ $1 =~ ^[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
+    if [[ $1 =~ ^\.?[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
 	return 0
     else
 	return 1
