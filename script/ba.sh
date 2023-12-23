@@ -223,19 +223,20 @@ function mov() {
     set_register "$register" "$value"
 
     if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-	zf=0
+	set_bit flag_register ${flag_bit["zf"]} 0  
 	return 0
     fi
     
     
     if [ "$value" -eq 0 ]; then
-	zf=1
+	set_bit flag_register ${flag_bit["zf"]} 1
     else
-	zf=0
+	set_bit flag_register ${flag_bit["zf"]} 0
     fi
 }
 
 function jnz() {
+    local zf=`get_bit flag_register ${flag_bit["zf"]}`
     if [ $zf -eq 0 ]; then
 	 jmp $1
     fi
@@ -249,9 +250,9 @@ function dec() {
     (($1--))
     local value=`read_register $1`
     if [ "$value" -eq 0 ]; then
-	zf=1
+	set_bit flag_register ${flag_bit["zf"]} 1
     else
-	zf=0
+	set_bit flag_register ${flag_bit["zf"]} 0
     fi
 }
 
@@ -279,16 +280,31 @@ function xor() {
     
     set_register "$register" "$value"
     if [ "$value" -eq 0 ]; then
-	zf=1
+	set_bit flag_register ${flag_bit["zf"]} 1
     else
-	zf=0
+	set_bit flag_register ${flag_bit["zf"]} 0
     fi
 }
 
 ###################################################################
+# FLAGS Ref: https://en.wikipedia.org/wiki/FLAGS_register
+###################################################################
+flag_register=0
+declare -A flag_bit
+flag_bit["zf"]=6
+
+###################################################################
 # REGISTERS
 ###################################################################
-valid_registers=("rdi" "rsi" "rdx" "r15" "rax" "zf" "ip")
+declare -A register_wideness
+register_wideness["rdi"]=64
+register_wideness["rsi"]=64
+register_wideness["rdx"]=64
+register_wideness["r15"]=64
+register_wideness["rax"]=64
+register_wideness["ip"]=64
+
+valid_registers=("rdi" "rsi" "rdx" "r15" "rax" "ip")
 
 # zeroize the registers
 for reg in ${valid_registers[@]}; do
@@ -312,6 +328,30 @@ done
 ###################################################################
 # HELPER
 ###################################################################
+function get_bit() {
+    if (($2 < 0 || $2 >= 64)); then
+	echo "bit selection is outside valid range"
+	exit 1
+    fi
+    local bit=$(( ($1 >> $2) & 1 ))
+    echo $bit
+    return 0
+}
+
+function set_bit() {
+    if (($2 < 0 || $2 >= 64)); then
+	echo "bit selection is outside valid range"
+	exit 1
+    fi
+    local num=$1
+
+    num=$((num & ~(1 << $2)))
+    num=$((num | ($3 << $2)))
+    eval "$1=$num"
+    return 0
+}
+
+
 function parse_line() {
     str="$1"
     str=`skip_space "$str"`
@@ -334,7 +374,7 @@ function is_register() {
     return 1
 }
 
-read_register() {
+function read_register() {
     if [[ -v $1 ]]; then
 	eval ret="\$$1"
 	echo $ret
@@ -345,7 +385,7 @@ read_register() {
     exit 1
 }
 
-set_register() {
+function set_register() {
     if [[ -v $1 ]]; then
 	eval "$1=\"$2\""
 	return 0 # Success (true)
@@ -380,7 +420,7 @@ function execute() {
     return 1
 }
 
-read_text() {
+function read_text() {
     local text_line=`find_label "$1:"`
     ((text_line++))
     local text=`load_code "$text_line"`
@@ -391,7 +431,7 @@ read_text() {
 }
 
 
-find_label() {
+function find_label() {
     local line_number=0
     for line in "${code_array[@]}"; do
 	if [[ "$1" == "$line" ]]; then
