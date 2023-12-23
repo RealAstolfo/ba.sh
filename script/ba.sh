@@ -263,48 +263,13 @@ done
 ###################################################################
 # HELPER
 ###################################################################
-function find_char() {
-    for (( i=0; i<${#1}; i++ )); do
-	if [[ "${1:$i:1}" == "$2" ]]; then
-	    echo $i
-	    return 0
-	fi
-    done
-    return 1
-}
-
-# See 
-function isidstart() {
-    case "$1" in
-	[[:alpha:]] | '_' | '.' | '?' | '@' )
-	    return 0 ;; # True
-	*)
-	    return 1 ;; # False
-    esac
-}
-
-# See nasmlib.c#L708
-#function stdscan() {
-    #remove whitespace from front
-#    str="$1"
-#    str="${str#"${str%%[![:space:]]*}"}"
-#    if [[ "$str" == $'\n' ]]; then
-#	echo "0" # means t_type = 0
-#    fi
-    #L720
-#    if isidstart "${str:0:1}" || [[ "${str:0:1}" == '$' && isidstart "${str:1:1}" ]]; then
-#	local is_sym=false
-#	if [ "${str:0:1}" == '$' ]; then
-#	    is_sym=true
-#	    str="${str:1}"
-#	fi	
-#   fi   
-#}
-
 function parse_line() {
     str="$1"
-    str="${str#"${str%%[![:space:]]*}"}"
-    echo $str
+    str="${str#"${str%%[![:space:]]*}"}" # Skip whitespace
+    if [[ $str == '\n' ]]; then
+	return 0
+    fi
+    echo str
 }
 
 function load_code() {
