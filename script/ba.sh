@@ -60,6 +60,9 @@ function read_assembly() {
 	if is_define $line; then
 	    continue
 	fi
+	# preprocess remove comments
+	line="${line//;*/}"
+	
 	# preprocess the defines found in the source.
 	for key in "${!asm_defines[@]}"; do
 	    value="${asm_defines[$key]}"
@@ -455,4 +458,5 @@ main() {
     done
 }
 
-main
+#main
+echo ${code_array[@]}
