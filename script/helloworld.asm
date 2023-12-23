@@ -1,10 +1,12 @@
+%include "syscalls.asm"
+
 START:
-	mov rdi,1
+	mov rdi,SYS_WRITE
 	mov rsi,TEXT
 	mov rdx,ADDRESS_AFTER_TEXT-TEXT
 	mov r15,10
 .loop:
-	mov rax,1
+	mov rax,SYS_STDOUT
 	syscall
 	dec r15
 	jnz .loop
