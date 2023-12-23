@@ -39,7 +39,7 @@ declare -A asm_defines
 function is_define() {
     str=$1
     str=`skip_space "$str"`
-    if [[ $1 == "%define"* ]]; then
+    if [[ $str == "%define"* ]]; then
 	asm_defines[$2]=$3
 	return 0
     fi
@@ -47,21 +47,24 @@ function is_define() {
 }
 
 code_array=()
-
 function read_assembly() {
     local line_array=()
     mapfile -t line_array < $1
     for line in "${line_array[@]}"; do
+	# preprocess remove comments
+	line="${line//;*/}"
+
+	# preprocess includes
 	file=`is_include $line`
 	if [ $? -eq 0 ]; then
 	    read_assembly $file
 	    continue
 	fi
+
 	if is_define $line; then
-	    continue
+	    continue # records the define into an associative array,
+	             # and continues to ensure it wont end up in code_array
 	fi
-	# preprocess remove comments
-	line="${line//;*/}"
 	
 	# preprocess the defines found in the source.
 	for key in "${!asm_defines[@]}"; do
@@ -69,6 +72,7 @@ function read_assembly() {
 	    line="${line//$key/$value}"
 	done
 
+	# if there is anything left in the line, append it to the array
 	if ! is_whitespace "$line"; then
 	    code_array+=("$line")
 	fi
@@ -458,5 +462,5 @@ main() {
     done
 }
 
-#main
-echo ${code_array[@]}
+echo "${code_array[@]}"
+main
