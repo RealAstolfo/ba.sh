@@ -46,6 +46,25 @@ function is_define() {
     return 1
 }
 
+declare -A asm_macros
+function is_macro() {
+    str=$1
+    str=`skip_space "$str"`
+    if [[ $str == "%macro"* ]]; then
+	current_macro=$2
+	return 0 # reading macro
+    elif [[ $str == "%endmacro" ]]; then
+	unset current_macro
+	return 0 # reading macro
+    elif [ -n "$current_macro" ]; then
+	asm_macros["$current_macro"]+=" $@"
+	return 0 # reading macro
+    else
+	return 1 # not reading macro
+    fi
+}
+
+
 code_array=()
 function read_assembly() {
     local line_array=()
@@ -64,6 +83,10 @@ function read_assembly() {
 	if is_define $line; then
 	    continue # records the define into an associative array,
 	             # and continues to ensure it wont end up in code_array
+	fi
+
+	if is_macro $line; then
+	    continue
 	fi
 	
 	# preprocess the defines found in the source.
@@ -462,5 +485,8 @@ main() {
     done
 }
 
-echo "${code_array[@]}"
+for line in "${code_array[@]}"; do
+    echo "$line"
+done
+
 main
