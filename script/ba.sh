@@ -35,6 +35,15 @@ function is_include() {
     return 1
 }
 
+declare -A asm_labels
+function is_label() {
+    if [[ $1 =~ ^\.?[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
+	return 0
+    else
+	return 1
+    fi
+}
+
 declare -A asm_defines
 function is_define() {
     str=$1
@@ -74,6 +83,16 @@ function is_times() {
     return 1
 }
 
+function is_org() {
+    str=$1
+    str=`skip_space "$str"`
+    if [[ $str == "org"* ]]; then
+	return 0
+    fi
+    return 1
+}
+
+declare org_address
 code_array=()
 function read_assembly() {
     local line_array=()
@@ -81,7 +100,15 @@ function read_assembly() {
     for line in "${line_array[@]}"; do
 	# preprocess remove comments
 	line="${line//;*/}"
+	# remove unnecessary whitespace in front
 	line=`skip_space "$line"`
+	# record org address
+	if is_org $line; then
+	    IFS=' ' read _ addr <<< $line
+	    org_address=$addr
+	    continue
+	fi
+	
 	# preprocess includes
 	file=`is_include $line`
 	if [ $? -eq 0 ]; then
@@ -96,6 +123,10 @@ function read_assembly() {
 
 	if is_macro $line; then
 	    continue
+	fi
+
+	if is_label $line; then
+	    asm_labels["$line"]="0x2000000" # TODO: load org address and increment labels
 	fi
 
 	# preprocess the defines found in the source.
@@ -377,14 +408,6 @@ function set_register() {
 
     echo "SET: Unknown register $1."
     exit 1
-}
-
-function is_label() {
-    if [[ $1 =~ ^\.?[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
-	return 0
-    else
-	return 1
-    fi
 }
 
 function execute() {
