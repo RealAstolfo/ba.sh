@@ -26,10 +26,7 @@ function skip_space() {
 }
 
 function is_include() {
-    str=$1
-    str=`skip_space "$str"`
     if [[ $1 == "%include"* ]]; then
-	echo "${2//\"/}" # strip quote literals
 	return 0
     fi
     return 1
@@ -46,10 +43,7 @@ function is_label() {
 
 declare -A asm_defines
 function is_define() {
-    str=$1
-    str=`skip_space "$str"`
-    if [[ $str == "%define"* ]]; then
-	asm_defines[$2]=$3
+    if [[ $1 == "%define" ]]; then
 	return 0
     fi
     return 1
@@ -57,27 +51,22 @@ function is_define() {
 
 declare -A asm_macros
 function is_macro() {
-    str=$1
-    str=`skip_space "$str"`
-    if [[ $str == "%macro"* ]]; then
-	current_macro=$2
-	return 0 # reading macro
-    elif [[ $str == "%endmacro" ]]; then
-	unset current_macro
-	return 0 # reading macro
-    elif [ -n "$current_macro" ]; then
-	asm_macros["$current_macro"]+=" $@"
-	return 0 # reading macro
-    else
-	return 1 # not reading macro
+    if [[ $1 == "%macro"* ]]; then
+	return 0
     fi
+    return 1
+}
+
+function is_endmacro() {
+    if [[ $1 == "%endmacro" ]]; then
+	return 0
+    fi
+    return 1
 }
 
 # seems like shorthand to make nasm repeat the following X times each line.
 function is_times() {
-    str=$1
-    str=`skip_space "$str"`
-    if [[ $str == "times"* ]]; then
+    if [[ $1 == "times" ]]; then
 	return 0
     fi
     return 1
@@ -92,66 +81,116 @@ function is_org() {
     return 1
 }
 
-declare org_address
-code_array=()
-function read_assembly() {
-    local line_array=()
-    mapfile -t line_array < $1
+function remove_empty_lines() {
+    local non_empty_lines=()
     for line in "${line_array[@]}"; do
-	# preprocess remove comments
-	line="${line//;*/}"
-	# remove unnecessary whitespace in front
-	line=`skip_space "$line"`
-	# record org address
-	if is_org $line; then
-	    IFS=' ' read _ addr <<< $line
-	    org_address=$addr
-	    continue
-	fi
-	
-	# preprocess includes
-	file=`is_include $line`
-	if [ $? -eq 0 ]; then
-	    read_assembly $file
-	    continue
-	fi
-
-	if is_define $line; then
-	    continue # records the define into an associative array,
-	             # and continues to ensure it wont end up in code_array
-	fi
-
-	if is_macro $line; then
-	    continue
-	fi
-
-	if is_label $line; then
-	    asm_labels["$line"]="0x2000000" # TODO: load org address and increment labels
-	fi
-
-	# preprocess the defines found in the source.
-	for key in "${!asm_defines[@]}"; do
-	    value="${asm_defines[$key]}"
-	    line="${line//$key/$value}"
-	done
-
-	if is_times $line; then
-	    IFS=' ' read _ count wideness content <<< $line
-	    for ((i = 0; i < count; i++)); do
-		code_array+=("$wideness $content")
-	    done
-	    continue
-	fi
-
-	# if there is anything left in the line, append it to the array
-	if ! is_whitespace "$line"; then
-	    code_array+=("$line")
+	if [[ -n "$line" ]]; then
+	    non_empty_lines+=("$line")
 	fi
     done
+    line_array=("${non_empty_lines[@]}")
+}
+
+function preprocess_assembly() {
+
+    # remove all comments
+    for index in "${!line_array[@]}"; do
+	line_array[$index]="${line_array[$index]//;*/}" # remove comments denoted with ';'
+	line_array[$index]=`skip_space "${line_array[$index]}"`
+    done
+
+    # find all assembly %include directives
+    local check_again=true
+    while [[ $check_again == true ]]; do
+	check_again=false
+	for index in "${!line_array[@]}"; do
+	    if is_include ${line_array[$index]}; then
+		IFS=' ' read _ file <<< ${line_array[$index]}
+		local include_lines=()
+		mapfile -t include_lines < "${file//\"/}" # remove the quotes
+		# remove all comments... again.
+		for index_j in "${!include_lines[@]}"; do
+		    include_lines[$index_j]="${include_lines[$index_j]//;*/}" # remove comments denoted with ';'
+		    include_lines[$index_j]=`skip_space "${include_lines[$index_j]}"`
+		done
+		local new_lines=("${line_array[@]:0:index}" "${include_lines[@]}" "${line_array[@]:index+1}")
+		line_array=("${new_lines[@]}")
+		check_again=true
+		# because includes could contain includes, or there could be multiple includes in a file
+		# we need to reset the loop
+		break
+	    fi
+	done
+    done
+
+    remove_empty_lines
+    
+    # find all assembly %define directives
+    for index in "${!line_array[@]}"; do
+	if is_define ${line_array[$index]}; then
+	    IFS=' ' read _ defname value <<< ${line_array[index]}
+	    asm_defines[$defname]=$value
+	    unset "line_array[$index]"
+	fi
+    done
+
+    # preprocess the defines found in the source.
+    local key_found=true
+    while [[ $key_found == true ]]; do
+	key_found=false  # Assume no more replacements will be made
+	
+	for key in "${!asm_defines[@]}"; do
+            for index in "${!line_array[@]}"; do
+		value="${asm_defines[$key]}"
+		# Perform substitution and check if any replacement was made
+		if [[ "${line_array[$index]}" =~ $key ]]; then
+                    line_array[$index]="${line_array[$index]//$key/$value}"
+                    key_found=true  # Set to true as a replacement was made
+		fi
+            done
+	done
+    done
+    
+    # find all assembly %macro and %endmacro directives
+    local current_macro
+    for index in "${!line_array[@]}"; do
+	if is_macro ${line_array[$index]}; then
+	    IFS=' ' read _ macname _ <<< ${line_array[$index]}
+	    current_macro=$macname
+	    unset "line_array[$index]"
+	elif is_endmacro ${line_array[$index]}; then
+	    unset current_macro
+	    unset "line_array[$index]"
+	elif [ -n "$current_macro" ]; then                                                                                            
+            asm_macros["$current_macro"]+="${line_array[$index]}"
+	    unset "line_array[$index]"
+	else
+	    continue
+	fi
+    done
+
+    # remove empty lines so that "index" becomes zero again
+    remove_empty_lines
+    
+    # find all 'times' macros and process them
+    local new_lines=()
+    local index_save
+    for index in "${!line_array[@]}"; do
+	if is_times ${line_array[$index]}; then
+	    IFS=' ' read _ count wideness content <<< ${line_array[$index]}
+	    unset "line_array[$index]"
+	    index_save=$index
+	    for ((i = 0; i < count; i++)); do
+		new_lines+=("$wideness $content")
+	    done
+	    break
+	fi
+    done
+    line_array=("${line_array[@]:0:index_save}" "${new_lines[@]}" "${line_array[@]:index_save+1}")
 }
 
 # load first file
-read_assembly $1
+preprocess_assembly $1
 
 ###################################################################
 # OPS
@@ -462,8 +501,8 @@ main() {
     done
 }
 
-for line in "${code_array[@]}"; do
+for line in "${line_array[@]}"; do
     echo "$line"
 done
 
-main
+#main
