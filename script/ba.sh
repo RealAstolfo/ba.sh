@@ -22,6 +22,7 @@ function is_whitespace() {
 function skip_space() {
     str=$1
     str="${str#"${str%%[![:space:]]*}"}" # Skip whitespace
+    str="${str%"${str##*[![:space:]]}"}" # Remove trailing whitespace
     echo $str
 }
 
@@ -231,35 +232,18 @@ function syscall() {
 }
 
 function mov() {
-    IFS=',' read -ra components <<< $1
-
-    local register
-    local value
-    if is_register ${components[0]}; then
-	register=${components[0]}
+    if [[ $1 =~ ^r[a-z0-9]+,[0-9]+$ ]]; then
+	# detected mov register,immediate
+        echo "Type: mov register,immediate"
+    elif [[ $1 =~ ^r[a-z0-9]+,r[a-z0-9]+*$ ]]; then
+	# detected niv register,register
+        echo "Type: mov register,register"
+    elif [[ $1 =~ ^r[a-z0-9]+,[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+	# detected mov register,memory
+        echo "Type: mov register,memory"
     else
-	echo "Unknown register ${components[0]}"
+        echo "Unknown mov type: $1"
 	exit 1
-    fi
-    
-    if is_register ${components[1]}; then
-	value=`read_register "${components[1]}"`
-    else
-	value=${components[1]}
-    fi
-
-    set_register "$register" "$value"
-
-    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-	set_bit flag_register ${flag_bit["zf"]} 0  
-	return 0
-    fi
-    
-    
-    if [ "$value" -eq 0 ]; then
-	set_bit flag_register ${flag_bit["zf"]} 1
-    else
-	set_bit flag_register ${flag_bit["zf"]} 0
     fi
 }
 
@@ -356,6 +340,54 @@ done
 ###################################################################
 # HELPER
 ###################################################################
+
+# A REX prefix must be encoded when:
+#
+#    using 64-bit operand size and the instruction does not default to 64-bit operand size; or
+#    using one of the extended registers (R8 to R15, XMM8 to XMM15, YMM8 to YMM15, CR8 to CR15 and DR8 to DR15); or
+#    using one of the uniform byte registers SPL, BPL, SIL or DIL. 
+#
+# A REX prefix must not be encoded when:
+#
+#    using one of the high byte registers AH, CH, BH or DH. 
+function generate_rex_prefix() {
+    local register="$1"
+    local rex_w=0  # Set to 1 for 64-bit operand size if needed
+
+    # Check if the register requires REX.W (64-bit operand size)
+    [[ $register =~ ^(r[8-9]|r1[0-5])$ ]] && rex_w=1
+
+    # Construct REX prefix
+    printf "0x%02X" $((0x40 | rex_w << 3))
+}
+
+function generate_mod_rm_byte() {
+    local register="$1"
+    local reg_code=0
+
+    case "$register" in
+        "rax") reg_code=0 ;;
+        "rcx") reg_code=1 ;;
+        "rdx") reg_code=2 ;;
+        "rbx") reg_code=3 ;;
+        "rsp") reg_code=4 ;;
+        "rbp") reg_code=5 ;;
+        "rsi") reg_code=6 ;;
+        "rdi") reg_code=7 ;;
+        "r8")  reg_code=8 ;;
+        "r9")  reg_code=9 ;;
+        "r10") reg_code=10 ;;
+        "r11") reg_code=11 ;;
+        "r12") reg_code=12 ;;
+        "r13") reg_code=13 ;;
+        "r14") reg_code=14 ;;
+        "r15") reg_code=15 ;;
+        *)     echo "Invalid register name"; return ;;
+    esac
+    # Construct Mod R/M byte for register operand
+    printf "0x%02X" $reg_code
+}
+
 function evaluate_expr() {
     local expr="$1"
     echo "$((expr))"
