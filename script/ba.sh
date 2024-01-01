@@ -234,13 +234,13 @@ function syscall() {
 function mov() {
     if [[ $1 =~ ^r[a-z0-9]+,[0-9]+$ ]]; then
 	# detected mov register,immediate
-        echo "Type: mov register,immediate"
+        echo "opcode: 67"
     elif [[ $1 =~ ^r[a-z0-9]+,r[a-z0-9]+*$ ]]; then
 	# detected niv register,register
-        echo "Type: mov register,register"
+        echo "opcode: 89"
     elif [[ $1 =~ ^r[a-z0-9]+,[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
 	# detected mov register,memory
-        echo "Type: mov register,memory"
+        echo "opcode: 8B"
     else
         echo "Unknown mov type: $1"
 	exit 1
@@ -341,6 +341,175 @@ done
 # HELPER
 ###################################################################
 
+function encode_register() {
+    local reg=$1
+    case $reg in
+	AL|AX|EAX|RAX|ST0|MMX0|XMM0|YMM0|ES|CR0|DR0)
+	    printf "%X" "$((2#0000))" ;;
+	CL|CX|ECX|RCX|ST1|MMX1|XMM1|YMM1|CS|CR1|DR1)
+	    printf "%X" "$((2#0001))" ;;
+	DL|DX|EDX|RDX|ST2|MMX2|XMM2|YMM2|SS|CR2|DR2)
+	    printf "%X" "$((2#0010))" ;;
+	BL|BX|EBX|RBX|ST3|MMX3|XMM3|YMM3|DS|CR3|DR3)
+	    printf "%X" "$((2#0011))" ;;
+	AH|SPL|SP|ESP|RSP|ST4|MMX4|XMM4|YMM4|FS|CR4|DR4)
+	    printf "%X" "$((2#0100))" ;;
+	CH|BPL|BP|EBP|RBP|ST5|MMX5|XMM5|YMM5|GS|CR5|DR5)
+	    printf "%X" "$((2#0101))" ;;
+	DH|SIL|SI|ESI|RSI|ST6|MMX6|XMM6|YMM6|CR6|DR6)
+	    printf "%X" "$((2#0110))" ;;
+	BH|DIL|DI|EDI|RDI|ST7|MMX7|XMM7|YMM7|CR7|DR6)
+	    printf "%X" "$((2#0111))" ;;
+	R8L|R8W|R8D|R8|MMX0|XMM8|YMM8|ES|CR8|DR8)
+	    printf "%X" "$((2#1000))" ;;
+	R9L|R9W|R9D|R9|MMX1|XMM9|YMM9|CS|CR9|DR9)
+	    printf "%X" "$((2#1001))" ;;
+	R10L|R10W|R10D|R10|MMX2|XMM10|YMM10|SS|CR10|DR10)
+	    printf "%X" "$((2#1010))" ;;
+	R11L|R11W|R11D|R11|MMX3|XMM11|YMM11|DS|CR11|DR11)
+	    printf "%X" "$((2#1011))" ;;
+	R12L|R12W|R12D|R12|MMX4|XMM12|YMM12|FS|CR12|DR12)
+	    printf "%X" "$((2#1100))" ;;
+	R13L|R13W|R13D|R13|MMX5|XMM13|YMM13|GS|CR13|DR13)
+	    printf "%X" "$((2#1101))" ;;
+	R14L|R14W|R14D|R14|MMX6|XMM14|YMM14|CR14|DR14)
+	    printf "%X" "$((2#1110))" ;;
+	R15L|R15W|R15D|R15|MMX7|XMM15|YMM15|CR15|DR15)
+	    printf "%X" "$((2#1111))" ;;
+    esac
+}
+
+function size_of_register() {
+    local reg=$1
+    case $reg in
+	AL|CL|DL|BL|AH|SPL|CH|BPL|DH|SIL|BH|DIL|R8L|R9L|R10L|R11L|R12L|R13L|R14L|R15L)
+	    printf "%d" "8" ;;
+	AX|CX|DX|BX|SP|BP|SI|DI|R8W|R9W|R10W|R11W|R12W|R13W|R14W|R15W)
+	    printf "%d" "16" ;;
+	EAX|ECX|EDX|EBX|ESP|EBP|ESI|EDI|R8D|R9D|R10D|R11D|R12D|R13D|R14D|R15D)
+	    printf "%d" "32" ;;
+	RAX|RCX|RDX|RBX|RSP|RBP|RSI|RDI|R8|R9|R10|R11|R12|R13|R14|R15)
+	    printf "%d" "64" ;;
+	ST0|ST1|ST2|ST3|ST4|ST5|ST6|ST7)
+	    printf "%d" "80" ;;
+	MMX0|MMX1|MMX2|MMX3|MMX4|MMX5|MMX6|MMX7)
+	    printf "%d" "64" ;;
+	XMM0|XMM1|XMM2|XMM3|XMM4|XMM5|XMM6|XMM7|XMM8|XMM9|XMM10|XMM11|XMM12|XMM13|XMM14|XMM15)
+	    printf "%d" "128" ;;
+	YMM0|YMM1|YMM2|YMM3|YMM4|YMM5|YMM6|YMM7|YMM8|YMM9|YMM10|YMM11|YMM12|YMM13|YMM14|YMM15)
+	    printf "%d" "256" ;;
+	ES|CS|SS|DS|FS|GS)
+	    printf "%d" "16" ;;
+	CR0|CR1|CR2|CR3|CR4|CR5|CR6|CR7|CR8|CR9|CR10|CR11|CR12|CR13|CR14|CR15)
+	    printf "%d" "32" ;;
+	DR0|DR1|DR2|DR3|DR4|DR5|DR6|DR7|DR8|DR9|DR10|DR11|DR12|DR13|DR14|DR15)
+	    printf "%d" "32" ;;
+    esac
+}
+
+function encode_legacy_prefixes() {
+    local instruction=$1
+    local encoded_prefixes=""
+
+    for (( i=0; i<${#instruction}; i++ )); do
+        case ${instruction:i:4} in
+            LOCK) encoded_prefixes+="F0" ;;
+            REPNE|REPNZ) encoded_prefixes+="F2" ;;
+            REP|REPE|REPZ) encoded_prefixes+="F3" ;;
+        esac
+
+        case ${instruction:i:2} in
+            CS) encoded_prefixes+="2E" ;;
+            SS) encoded_prefixes+="36" ;;
+            DS) encoded_prefixes+="3E" ;;
+            ES) encoded_prefixes+="26" ;;
+            FS) encoded_prefixes+="64" ;;
+            GS) encoded_prefixes+="65" ;;
+        esac
+
+        case ${instruction:i:2} in
+            "66") encoded_prefixes+="66" ;;
+            "67") encoded_prefixes+="67" ;;
+        esac
+    done
+
+    echo "$encoded_prefixes"
+}
+
+
+# will always generate REX prefix unless using the high byte registers
+# will make the machine code slightly larger but parsing simpler
+# since according to https://wiki.osdev.org/X86-64_Instruction_Encoding#Usage, theres a lot of moments
+# where having the prefix or not does not matter.
+# this allows me to ignore instructions that default to 64bit operand size, which ignores this annoyingly complext 'if'
+# "using 64-bit operand size and the instruction does not default to 64-bit operand size" 
+function needs_rex_prefix() {
+    local operands=("$@")
+    for operand in "${operands[@]}"; do
+	case $operand in
+	    AH|CH|BH|DH)
+		return 1 ;; # no
+	    *)
+		continue ;; # skip
+	esac
+    done
+    return 0 # yes
+}
+
+
+function encode_rex_prefix() {
+    shift # shift parameters left
+    local registers=("$@")
+
+    local max_size=0
+    local extended_register=false
+    for register in "${registers[@]}"; do
+	local size=size_of_register $register
+	if [ $size -gt $max_size ]; then
+	    max_size=$size
+	fi
+
+	case $register in
+	    R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM1[0-5]|CR[8-9]|CR1[0-5]|DR[8-9]|DR1[0-5]|SPL|BPL|SIL|DIL)
+		extended_register=true ;;
+	esac
+    done
+    
+    # Initialize the REX prefix byte with fixed bits (0100)
+    local rex_prefix="0100"
+
+    # Set the W bit based on the operand size
+    if [[ "$max_size" == "64" ]]; then
+	rex_prefix+="1"
+    else
+	rex_prefix+="0"
+    fi
+
+    if [ $extended_register -eq true ]; then
+	rex_prefix+="1"
+    else
+	rex_prefix+="0"
+    fi
+    
+
+    # Set the X and B bits to 0
+    # X Bit (Bit 1):
+    # The X bit indicates whether an SSE, AVX, or AVX-512 register is used as an index in a memory addressing calculation.
+    # If any of the registers in your list are SSE, AVX, or AVX-512 registers used as an index,
+    # then you should set the X bit to 1; otherwise, it should be set to 0.
+
+    # B Bit (Bit 2):
+    # The B bit indicates whether the R8-R15, XMM8-XMM15, or YMM8-YMM15 registers
+    # are used as the base in a memory addressing calculation.
+    # If any of the registers in your list are R8-R15, XMM8-XMM15, or YMM8-YMM15 registers used as the base,
+    # then you should set the B bit to 1; otherwise, it should be set to 0.
+
+    # TODO: Implement this logic to support index/base addressing with extended registers
+    rex_prefix+="00"
+
+    printf "%02X" "$((16#$rex_prefix))"
+}
+
 # A REX prefix must be encoded when:
 #
 #    using 64-bit operand size and the instruction does not default to 64-bit operand size; or
@@ -361,31 +530,153 @@ function generate_rex_prefix() {
     printf "0x%02X" $((0x40 | rex_w << 3))
 }
 
-function generate_mod_rm_byte() {
-    local register="$1"
-    local reg_code=0
 
-    case "$register" in
-        "rax") reg_code=0 ;;
-        "rcx") reg_code=1 ;;
-        "rdx") reg_code=2 ;;
-        "rbx") reg_code=3 ;;
-        "rsp") reg_code=4 ;;
-        "rbp") reg_code=5 ;;
-        "rsi") reg_code=6 ;;
-        "rdi") reg_code=7 ;;
-        "r8")  reg_code=8 ;;
-        "r9")  reg_code=9 ;;
-        "r10") reg_code=10 ;;
-        "r11") reg_code=11 ;;
-        "r12") reg_code=12 ;;
-        "r13") reg_code=13 ;;
-        "r14") reg_code=14 ;;
-        "r15") reg_code=15 ;;
-        *)     echo "Invalid register name"; return ;;
-    esac
-    # Construct Mod R/M byte for register operand
-    printf "0x%02X" $reg_code
+generate_modrm() {
+    destination="$1"
+    source="$2"
+
+    # Define register types
+    general_registers=("rax" "rcx" "rdx" "rbx" "rsp" "rbp" "rsi" "rdi" "r8" "r9" "r10" "r11" "r12" "r13" "r14" "r15")
+    xmm_registers=("xmm0" "xmm1" "xmm2" "xmm3" "xmm4" "xmm5" "xmm6" "xmm7")
+    ymm_registers=("ymm0" "ymm1" "ymm2" "ymm3" "ymm4" "ymm5" "ymm6" "ymm7")
+
+    # Function to get the register opcode and type
+    get_register_info() {
+        local operand="$1"
+        local register_array=("${!2}")
+
+        if [[ " ${register_array[*]} " =~ " $operand " ]]; then
+            local reg_opcode=$((16#${operand: -1}))  # Extract the register number from the operand (e.g., rax -> 0, xmm3 -> 3)
+            local reg_type="11"  # Register type
+            echo "$reg_type$reg_opcode"
+        else
+            echo "Error: Unsupported register type for operand: $operand"
+            return 1
+        fi
+    }
+
+    # Function to get the mod and r/m fields for memory operand
+    get_memory_info() {
+        local operand="$1"
+        local operand_size="$2"
+
+        local mod="00"  # Memory addressing mode (default to direct addressing)
+        local reg_type="00"  # Register type for r/m field
+
+        if [[ "$operand" =~ ^\[.*\]$ ]]; then
+            # Memory operand
+            operand="${operand:1:${#operand}-2}"  # Remove square brackets
+            local displacement=""
+            local base=""
+            local index=""
+            local scale=""
+
+            # Check for displacement
+            if [[ "$operand" =~ ^[0-9]+$ ]]; then
+                displacement="$operand"
+            else
+                IFS=',' read -ra parts <<< "$operand"
+                local num_parts=${#parts[@]}
+
+                case "$num_parts" in
+                    1)
+                        base="${parts[0]}"
+                        ;;
+                    2)
+                        base="${parts[0]}"
+                        index="${parts[1]}"
+                        ;;
+                    3)
+                        displacement="${parts[0]}"
+                        base="${parts[1]}"
+                        index="${parts[2]}"
+                        ;;
+                esac
+            fi
+
+            # Determine register type and set mod field accordingly
+            if [ -n "$base" ]; then
+                reg_type=$(get_register_info "$base" "general_registers")
+            elif [ -n "$index" ]; then
+                reg_type=$(get_register_info "$index" "general_registers")
+            fi
+
+            # Set mod field based on displacement and register type
+            if [ -n "$displacement" ]; then
+                mod="01"  # Byte displacement
+            elif [ "$reg_type" == "11000" ]; then
+                mod="10"  # 64-bit addressing
+            fi
+        fi
+
+        echo "$mod$reg_type"
+    }
+
+    # Determine mod, reg, and r/m fields based on operand types
+    if [[ "$destination" =~ ^-?[0-9]+$ ]]; then
+        # Immediate value as destination
+        mod="11"
+        reg_type="000"
+        reg_opcode="000"
+        rm="000"
+    else
+        # Register or memory destination
+        reg_info=$(get_register_info "$destination" "general_registers")
+        if [ $? -eq 1 ]; then
+            return 1
+        fi
+
+        modrm_byte="${reg_info}"
+        if [[ "$destination" =~ ^xmm[0-7]$ ]]; then
+            # XMM register
+            modrm_byte="${reg_info}10"
+        elif [[ "$destination" =~ ^ymm[0-7]$ ]]; then
+            # YMM register
+            modrm_byte="${reg_info}10"
+        elif [[ "$destination" =~ ^\[.*\]$ ]]; then
+            # Memory operand
+            memory_info=$(get_memory_info "$destination" "64")
+            if [ $? -eq 1 ]; then
+                return 1
+            fi
+            modrm_byte="${memory_info}"
+        fi
+
+        # Determine mod, reg, and r/m fields for the source operand
+        if [[ "$source" =~ ^-?[0-9]+$ ]]; then
+            # Immediate value as source
+            mod="11"
+            reg_type="000"
+            reg_opcode="000"
+            rm="000"
+        else
+            reg_info=$(get_register_info "$source" "general_registers")
+            if [ $? -eq 1 ]; then
+                return 1
+            fi
+
+            modrm_byte="${modrm_byte}${reg_info}"
+            if [[ "$source" =~ ^xmm[0-7]$ ]]; then
+                # XMM register
+                modrm_byte="${modrm_byte}10"
+            elif [[ "$source" =~ ^ymm[0-7]$ ]]; then
+                # YMM register
+                modrm_byte="${modrm_byte}10"
+            elif [[ "$source" =~ ^\[.*\]$ ]]; then
+                # Memory operand
+                memory_info=$(get_memory_info "$source" "64")
+                if [ $? -eq 1 ]; then
+                    return 1
+                fi
+                modrm_byte="${modrm_byte}${memory_info}"
+            fi
+        fi
+    fi
+
+    # Combine mod, reg, and r/m fields to form ModRM byte
+    modrm_byte="${mod}${modrm_byte}"
+
+    echo "ModRM Byte: ${modrm_byte}"
 }
 
 function evaluate_expr() {
@@ -537,4 +828,18 @@ for line in "${line_array[@]}"; do
     echo "$line"
 done
 
-#main
+
+# Test cases
+test_instruction() {
+  local instruction="$1"
+  local expected_result="$2"
+
+  needs_rex_prefix "$instruction"
+  actual_result=$?
+
+  if [ "$actual_result" -eq "$expected_result" ]; then
+    echo "PASS: $instruction - Expected: $expected_result, Actual: $actual_result"
+  else
+    echo "FAIL: $instruction - Expected: $expected_result, Actual: $actual_result"
+  fi
+}
