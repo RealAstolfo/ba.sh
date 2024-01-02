@@ -148,6 +148,24 @@ function is_register() {
     return 1
 }
 
+function is_memory() {
+    local operand="$1"
+    if [[ $operand =~ ^\[[^\]]+\]$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function is_immediate() {
+    local operand="$1"
+    if [[ $operand =~ ^([+-]?[0-9]+|0x[a-fA-F0-9]+|[0-9a-fA-F]+h|0b[01]+)$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 
 function preprocess_assembly() {
 
@@ -481,16 +499,9 @@ function encode_rex_prefix() {
 ###################################################################
 # OPS
 ###################################################################
-function call() {
-    if [[ "$1" == "exit" ]]; then
-	exitprog
-    fi
-}
 
-
-function exitprog() {
-    exit $rdi
-}
+# function jmp() {
+# }
 
 function syscall() {
     local opcode=()
@@ -764,9 +775,16 @@ function main() {
 	fi
 
 	if [[ "${words[0]}" == "syscall" ]]; then
-	    local opcode=`syscall`
-	    for ((i = 0; i < ${#opcode[@]}; i++)); do
-		bytes+=("${opcode[$i]}")
+	    local inst=`syscall`
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "jmp" ]]; then
+	    local inst=`jmp ${words[1]}`
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
 	    done
 	fi
     done
