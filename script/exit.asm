@@ -1,9 +1,10 @@
-%include "syscalls.asm"
+	%include "lib/sys/linux_elf.nasm"
+	%include "syscalls.asm"
 
 START:
 
-	mov rax,SYS_EXIT # Exit syscall
-	mov rdi,1969
+	mov eax,SYS_EXIT ; Exit syscall
+	mov edi,1969
 	syscall
 
 END:

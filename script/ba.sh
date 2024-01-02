@@ -33,7 +33,54 @@ function is_include() {
     return 1
 }
 
-declare -A asm_labels
+function is_db() {
+    if [[ $1 == "db"* ]]; then
+	return 0
+    fi
+    return 1
+}
+
+function is_multi_db() {
+    local input_string="$@"
+    local entry_count=0
+    local in_quotes=false
+
+    case $1 in
+	db|dw|dd|dq)
+	    ;;
+	*)
+	    return 1
+	    ;;
+    esac
+    
+    # Iterate over the input string and count the number of commas
+    for ((i=0; i<${#input_string}; i++)); do
+        char="${input_string:i:1}"
+
+        if [[ $char == '"' ]]; then
+            # Toggle the in_quotes flag when encountering a double quote
+            if [[ $in_quotes == true ]]; then
+                in_quotes=false
+            else
+                in_quotes=true
+            fi
+        elif [[ $char == ',' ]]; then
+	    if $in_quotes; then
+		continue
+	    else
+		((entry_count++))
+	    fi    
+	fi
+    done
+
+    # Check if there are multiple entries
+    if ((entry_count > 0)); then
+        return 0 # Multiple entries found
+    else
+        return 1 # Only a single entry
+    fi
+}
+
 function is_label() {
     if [[ $1 =~ ^\.?[a-zA-Z_][a-zA-Z_0-9]*: ]]; then
 	return 0
@@ -91,6 +138,16 @@ function remove_empty_lines() {
     done
     line_array=("${non_empty_lines[@]}")
 }
+
+function is_register() {
+    local reg=$1
+    case $reg in
+	AL|AX|EAX|RAX|ST0|MMX0|XMM0|YMM0|ES|CR0|DR0|CL|CX|ECX|RCX|ST1|MMX1|XMM1|YMM1|CS|CR1|DR1|DL|DX|EDX|RDX|ST2|MMX2|XMM2|YMM2|SS|CR2|DR2|BL|BX|EBX|RBX|ST3|MMX3|XMM3|YMM3|DS|CR3|DR3|AH|SPL|SP|ESP|RSP|ST4|MMX4|XMM4|YMM4|FS|CR4|DR4|CH|BPL|BP|EBP|RBP|ST5|MMX5|XMM5|YMM5|GS|CR5|DR5|DH|SIL|SI|ESI|RSI|ST6|MMX6|XMM6|YMM6|CR6|DR6|BH|DIL|DI|EDI|RDI|ST7|MMX7|XMM7|YMM7|CR7|DR6|R8L|R8W|R8D|R8|MMX0|XMM8|YMM8|ES|CR8|DR8|R9L|R9W|R9D|R9|MMX1|XMM9|YMM9|CS|CR9|DR9|R10L|R10W|R10D|R10|MMX2|XMM10|YMM10|SS|CR10|DR10|R11L|R11W|R11D|R11|MMX3|XMM11|YMM11|DS|CR11|DR11|R12L|R12W|R12D|R12|MMX4|XMM12|YMM12|FS|CR12|DR12|R13L|R13W|R13D|R13|MMX5|XMM13|YMM13|GS|CR13|DR13|R14L|R14W|R14D|R14|MMX6|XMM14|YMM14|CR14|DR14|R15L|R15W|R15D|R15|MMX7|XMM15|YMM15|CR15|DR15)
+	    return 0
+    esac
+    return 1
+}
+
 
 function preprocess_assembly() {
 
@@ -188,154 +245,62 @@ function preprocess_assembly() {
 	fi
     done
     line_array=("${line_array[@]:0:index_save}" "${new_lines[@]}" "${line_array[@]:index_save+1}")
+    remove_empty_lines
+    
+    # preprocess comma'd db,dw,dd,dq's
+    local new_lines=()
+    local check_again=true
+    while [[ $check_again == true ]]; do
+	check_again=false
+	for index in "${!line_array[@]}"; do
+	    if is_multi_db ${line_array[$index]}; then
+		IFS=' ' read entry_type entries <<< ${line_array[$index]}
+		local resolved_lines=()
+		local hex_values=()
+		local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
+		if [[ $entries =~ $regex ]]; then
+		    local data="${BASH_REMATCH[0]}"
+		    IFS=',' read -ra values <<< "$data"
+		    for value in "${values[@]}"; do
+			if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
+			    hex_values+=("${value}")
+			elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
+			    ascii_string="${BASH_REMATCH[1]}"
+			    for ((i = 0; i < ${#ascii_string}; i++)); do
+				case $entry_type in
+				    db)
+					hex_values+=("$(printf "0x%02X" "'${ascii_string:$i:1}")") ;;
+				    dw)
+					hex_values+=("$(printf "0x%04X" "'${ascii_string:$i:1}")") ;;
+				    dd)
+					hex_values+=("$(printf "0x%08X" "'${ascii_string:$i:1}")") ;;
+				    dq)
+					hex_values+=("$(printf "0x%16X" "'${ascii_string:$i:1}")") ;;
+				esac
+			    done
+			fi
+		    done
+		fi
+
+		for hex in "${hex_values[@]}"; do
+		    resolved_lines+=("$entry_type $hex")
+		done
+		local new_lines=("${line_array[@]:0:$index}" "${resolved_lines[@]}" "${line_array[@]:$index+1}")
+		line_array=("${new_lines[@]}")		
+		check_again=true
+		break
+		
+	    fi
+	done
+
+    done
+
+    remove_empty_lines
+
 }
 
 # load first file
 preprocess_assembly $1
-
-###################################################################
-# OPS
-###################################################################
-function call() {
-    if [[ "$1" == "exit" ]]; then
-	exitprog
-    fi
-}
-
-
-function exitprog() {
-    exit $rdi
-}
-
-function syscall() {
-    case $rax in
-	1) # Write Syscall
-	    case $rdi in
-		1)    
-		    echo `read_text "$rsi"`
-		    ;;
-		*)
-		    echo "Error: unsupported filedescriptor for write syscall"
-		    exit 1
-		    ;;
-	    esac
-	    ;;
-	60) # Exit Syscall
-	    exit $rdi
-	    ;;
-	*)
-	    echo "Error: Unknown syscall $rax."
-	    exit 1
-	    ;;
-    esac
-    return 0
-}
-
-function mov() {
-    if [[ $1 =~ ^r[a-z0-9]+,[0-9]+$ ]]; then
-	# detected mov register,immediate
-        echo "opcode: 67"
-    elif [[ $1 =~ ^r[a-z0-9]+,r[a-z0-9]+*$ ]]; then
-	# detected niv register,register
-        echo "opcode: 89"
-    elif [[ $1 =~ ^r[a-z0-9]+,[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-	# detected mov register,memory
-        echo "opcode: 8B"
-    else
-        echo "Unknown mov type: $1"
-	exit 1
-    fi
-}
-
-function jnz() {
-    local zf=`get_bit flag_register ${flag_bit["zf"]}`
-    if [ $zf -eq 0 ]; then
-	 jmp $1
-    fi
-}
-
-function jmp() {
-    ip=`find_label $1:`
-}
-
-function dec() {
-    (($1--))
-    local value=`read_register $1`
-    if [ "$value" -eq 0 ]; then
-	set_bit flag_register ${flag_bit["zf"]} 1
-    else
-	set_bit flag_register ${flag_bit["zf"]} 0
-    fi
-}
-
-function xor() {
-    IFS=',' read -ra components <<< $1
-
-    local register
-    local value
-    local value_a
-    local value_b
-    if is_register ${components[0]}; then
-	register=${components[0]}
-	value_a=`read_register "${components[0]}"`
-    else
-	echo "Unknown register ${components[0]}"
-	exit 1
-    fi
-    
-    if is_register ${components[1]}; then
-	value_b=`read_register "${components[1]}"`
-    else
-	value_b=${components[1]}
-    fi
-    value=$(((value_a & ~value_b) | (~value_a & value_b)))
-    
-    set_register "$register" "$value"
-    if [ "$value" -eq 0 ]; then
-	set_bit flag_register ${flag_bit["zf"]} 1
-    else
-	set_bit flag_register ${flag_bit["zf"]} 0
-    fi
-}
-
-###################################################################
-# FLAGS Ref: https://en.wikipedia.org/wiki/FLAGS_register
-###################################################################
-flag_register=0
-declare -A flag_bit
-flag_bit["zf"]=6
-
-###################################################################
-# REGISTERS
-###################################################################
-declare -A register_wideness
-register_wideness["rdi"]=64
-register_wideness["rsi"]=64
-register_wideness["rdx"]=64
-register_wideness["r15"]=64
-register_wideness["rax"]=64
-register_wideness["ip"]=64
-
-valid_registers=("rdi" "rsi" "rdx" "r15" "rax" "ip")
-
-# zeroize the registers
-for reg in ${valid_registers[@]}; do
-    declare "${reg}=0"
-done
-
-###################################################################
-# INSTRUCTIONS
-###################################################################
-registered_instructions=("mov" "syscall" "call" "dec" "jnz" "jmp" "xor")
-
-
-for func in ${registered_instructions[@]}; do
-    if [ "$(type -t "$func")" == "function" ]; then
-	continue
-    else
-	echo "Function implementation of $func does not exist"
-    fi
-done
 
 ###################################################################
 # HELPER
@@ -345,37 +310,37 @@ function encode_register() {
     local reg=$1
     case $reg in
 	AL|AX|EAX|RAX|ST0|MMX0|XMM0|YMM0|ES|CR0|DR0)
-	    printf "%X" "$((2#0000))" ;;
+	    printf "%02X" "$((2#0000))" ;;
 	CL|CX|ECX|RCX|ST1|MMX1|XMM1|YMM1|CS|CR1|DR1)
-	    printf "%X" "$((2#0001))" ;;
+	    printf "%02X" "$((2#0001))" ;;
 	DL|DX|EDX|RDX|ST2|MMX2|XMM2|YMM2|SS|CR2|DR2)
-	    printf "%X" "$((2#0010))" ;;
+	    printf "%02X" "$((2#0010))" ;;
 	BL|BX|EBX|RBX|ST3|MMX3|XMM3|YMM3|DS|CR3|DR3)
-	    printf "%X" "$((2#0011))" ;;
+	    printf "%02X" "$((2#0011))" ;;
 	AH|SPL|SP|ESP|RSP|ST4|MMX4|XMM4|YMM4|FS|CR4|DR4)
-	    printf "%X" "$((2#0100))" ;;
+	    printf "%02X" "$((2#0100))" ;;
 	CH|BPL|BP|EBP|RBP|ST5|MMX5|XMM5|YMM5|GS|CR5|DR5)
-	    printf "%X" "$((2#0101))" ;;
+	    printf "%02X" "$((2#0101))" ;;
 	DH|SIL|SI|ESI|RSI|ST6|MMX6|XMM6|YMM6|CR6|DR6)
-	    printf "%X" "$((2#0110))" ;;
+	    printf "%02X" "$((2#0110))" ;;
 	BH|DIL|DI|EDI|RDI|ST7|MMX7|XMM7|YMM7|CR7|DR6)
-	    printf "%X" "$((2#0111))" ;;
+	    printf "%02X" "$((2#0111))" ;;
 	R8L|R8W|R8D|R8|MMX0|XMM8|YMM8|ES|CR8|DR8)
-	    printf "%X" "$((2#1000))" ;;
+	    printf "%02X" "$((2#1000))" ;;
 	R9L|R9W|R9D|R9|MMX1|XMM9|YMM9|CS|CR9|DR9)
-	    printf "%X" "$((2#1001))" ;;
+	    printf "%02X" "$((2#1001))" ;;
 	R10L|R10W|R10D|R10|MMX2|XMM10|YMM10|SS|CR10|DR10)
-	    printf "%X" "$((2#1010))" ;;
+	    printf "%02X" "$((2#1010))" ;;
 	R11L|R11W|R11D|R11|MMX3|XMM11|YMM11|DS|CR11|DR11)
-	    printf "%X" "$((2#1011))" ;;
+	    printf "%02X" "$((2#1011))" ;;
 	R12L|R12W|R12D|R12|MMX4|XMM12|YMM12|FS|CR12|DR12)
-	    printf "%X" "$((2#1100))" ;;
+	    printf "%02X" "$((2#1100))" ;;
 	R13L|R13W|R13D|R13|MMX5|XMM13|YMM13|GS|CR13|DR13)
-	    printf "%X" "$((2#1101))" ;;
+	    printf "%02X" "$((2#1101))" ;;
 	R14L|R14W|R14D|R14|MMX6|XMM14|YMM14|CR14|DR14)
-	    printf "%X" "$((2#1110))" ;;
+	    printf "%02X" "$((2#1110))" ;;
 	R15L|R15W|R15D|R15|MMX7|XMM15|YMM15|CR15|DR15)
-	    printf "%X" "$((2#1111))" ;;
+	    printf "%02X" "$((2#1111))" ;;
     esac
 }
 
@@ -452,20 +417,23 @@ function needs_rex_prefix() {
 	    *)
 		continue ;; # skip
 	esac
+	local size=size_of_register $operand
+	if [ $size -eq 64 ]; then
+	    return 0 # yes
+	fi
     done
     return 0 # yes
 }
 
 
 function encode_rex_prefix() {
-    shift # shift parameters left
     local registers=("$@")
 
     local max_size=0
     local extended_register=false
     for register in "${registers[@]}"; do
 	local size=size_of_register $register
-	if [ $size -gt $max_size ]; then
+	if [ $size > $max_size ]; then
 	    max_size=$size
 	fi
 
@@ -485,7 +453,7 @@ function encode_rex_prefix() {
 	rex_prefix+="0"
     fi
 
-    if [ $extended_register -eq true ]; then
+    if [[ $extended_register == true ]]; then
 	rex_prefix+="1"
     else
 	rex_prefix+="0"
@@ -510,336 +478,421 @@ function encode_rex_prefix() {
     printf "%02X" "$((16#$rex_prefix))"
 }
 
-# A REX prefix must be encoded when:
-#
-#    using 64-bit operand size and the instruction does not default to 64-bit operand size; or
-#    using one of the extended registers (R8 to R15, XMM8 to XMM15, YMM8 to YMM15, CR8 to CR15 and DR8 to DR15); or
-#    using one of the uniform byte registers SPL, BPL, SIL or DIL. 
-#
-# A REX prefix must not be encoded when:
-#
-#    using one of the high byte registers AH, CH, BH or DH. 
-function generate_rex_prefix() {
-    local register="$1"
-    local rex_w=0  # Set to 1 for 64-bit operand size if needed
-
-    # Check if the register requires REX.W (64-bit operand size)
-    [[ $register =~ ^(r[8-9]|r1[0-5])$ ]] && rex_w=1
-
-    # Construct REX prefix
-    printf "0x%02X" $((0x40 | rex_w << 3))
+###################################################################
+# OPS
+###################################################################
+function call() {
+    if [[ "$1" == "exit" ]]; then
+	exitprog
+    fi
 }
 
 
-generate_modrm() {
-    destination="$1"
-    source="$2"
+function exitprog() {
+    exit $rdi
+}
 
-    # Define register types
-    general_registers=("rax" "rcx" "rdx" "rbx" "rsp" "rbp" "rsi" "rdi" "r8" "r9" "r10" "r11" "r12" "r13" "r14" "r15")
-    xmm_registers=("xmm0" "xmm1" "xmm2" "xmm3" "xmm4" "xmm5" "xmm6" "xmm7")
-    ymm_registers=("ymm0" "ymm1" "ymm2" "ymm3" "ymm4" "ymm5" "ymm6" "ymm7")
+function syscall() {
+    local opcode=()
+    opcode+=("0F")
+    opcode+=("05")
+    echo "${opcode[@]}"
+}
 
-    # Function to get the register opcode and type
-    get_register_info() {
-        local operand="$1"
-        local register_array=("${!2}")
+function mov() {
+    local operands=("$@")
+    local opcode
+    local bytes=()
 
-        if [[ " ${register_array[*]} " =~ " $operand " ]]; then
-            local reg_opcode=$((16#${operand: -1}))  # Extract the register number from the operand (e.g., rax -> 0, xmm3 -> 3)
-            local reg_type="11"  # Register type
-            echo "$reg_type$reg_opcode"
-        else
-            echo "Error: Unsupported register type for operand: $operand"
-            return 1
-        fi
-    }
+    # if first operand is a register, and second operator is an immediate
+    if is_register ${operands[0]^^} && [[ "${operands[1]}" =~ ^[0-9]+$ ]]; then
+	if needs_rex_prefix ${operands[0]^^}; then
+	    local prefix=`encode_rex_prefix ${operands[0]^^}`
+	    #bytes+=("$prefix")
+	fi
+	
+	local regcode=`encode_register ${operands[0]^^}` # ^^ to make it all capital
+	local immediate
 
-    # Function to get the mod and r/m fields for memory operand
-    get_memory_info() {
-        local operand="$1"
-        local operand_size="$2"
 
-        local mod="00"  # Memory addressing mode (default to direct addressing)
-        local reg_type="00"  # Register type for r/m field
+	local reg_size=`size_of_register ${operands[0]^^}`
+	if [ $reg_size -eq 8 ]; then
+	    immediate=`printf "%02X" "${operands[1]}"`
+	    opcode=(`printf "%02X" "$(( 0xB0 | 0x$regcode ))"`)
+	elif [ $reg_size -eq 16 ]; then
+	    immediate=`printf "%04X" "${operands[1]}"`
+	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
+	elif [ $reg_size -eq 32 ]; then
+	    immediate=`printf "%08X" "${operands[1]}"`
+	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
+	elif [ $reg_size -eq 64 ]; then
+	    immediate=`printf "%016X" "${operands[1]}"`
+	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
+	fi
 
-        if [[ "$operand" =~ ^\[.*\]$ ]]; then
-            # Memory operand
-            operand="${operand:1:${#operand}-2}"  # Remove square brackets
-            local displacement=""
-            local base=""
-            local index=""
-            local scale=""
+	bytes+=("$opcode")
+	local imm_len=${#immediate}
+	# immediates need to be encoded backwards
+	for ((i = imm_len - 2; i >= 0; i -= 2)); do
+	    local byte=${immediate:i:2}
+	    bytes+=("$byte")
+	done
 
-            # Check for displacement
-            if [[ "$operand" =~ ^[0-9]+$ ]]; then
-                displacement="$operand"
-            else
-                IFS=',' read -ra parts <<< "$operand"
-                local num_parts=${#parts[@]}
-
-                case "$num_parts" in
-                    1)
-                        base="${parts[0]}"
-                        ;;
-                    2)
-                        base="${parts[0]}"
-                        index="${parts[1]}"
-                        ;;
-                    3)
-                        displacement="${parts[0]}"
-                        base="${parts[1]}"
-                        index="${parts[2]}"
-                        ;;
-                esac
-            fi
-
-            # Determine register type and set mod field accordingly
-            if [ -n "$base" ]; then
-                reg_type=$(get_register_info "$base" "general_registers")
-            elif [ -n "$index" ]; then
-                reg_type=$(get_register_info "$index" "general_registers")
-            fi
-
-            # Set mod field based on displacement and register type
-            if [ -n "$displacement" ]; then
-                mod="01"  # Byte displacement
-            elif [ "$reg_type" == "11000" ]; then
-                mod="10"  # 64-bit addressing
-            fi
-        fi
-
-        echo "$mod$reg_type"
-    }
-
-    # Determine mod, reg, and r/m fields based on operand types
-    if [[ "$destination" =~ ^-?[0-9]+$ ]]; then
-        # Immediate value as destination
-        mod="11"
-        reg_type="000"
-        reg_opcode="000"
-        rm="000"
-    else
-        # Register or memory destination
-        reg_info=$(get_register_info "$destination" "general_registers")
-        if [ $? -eq 1 ]; then
-            return 1
-        fi
-
-        modrm_byte="${reg_info}"
-        if [[ "$destination" =~ ^xmm[0-7]$ ]]; then
-            # XMM register
-            modrm_byte="${reg_info}10"
-        elif [[ "$destination" =~ ^ymm[0-7]$ ]]; then
-            # YMM register
-            modrm_byte="${reg_info}10"
-        elif [[ "$destination" =~ ^\[.*\]$ ]]; then
-            # Memory operand
-            memory_info=$(get_memory_info "$destination" "64")
-            if [ $? -eq 1 ]; then
-                return 1
-            fi
-            modrm_byte="${memory_info}"
-        fi
-
-        # Determine mod, reg, and r/m fields for the source operand
-        if [[ "$source" =~ ^-?[0-9]+$ ]]; then
-            # Immediate value as source
-            mod="11"
-            reg_type="000"
-            reg_opcode="000"
-            rm="000"
-        else
-            reg_info=$(get_register_info "$source" "general_registers")
-            if [ $? -eq 1 ]; then
-                return 1
-            fi
-
-            modrm_byte="${modrm_byte}${reg_info}"
-            if [[ "$source" =~ ^xmm[0-7]$ ]]; then
-                # XMM register
-                modrm_byte="${modrm_byte}10"
-            elif [[ "$source" =~ ^ymm[0-7]$ ]]; then
-                # YMM register
-                modrm_byte="${modrm_byte}10"
-            elif [[ "$source" =~ ^\[.*\]$ ]]; then
-                # Memory operand
-                memory_info=$(get_memory_info "$source" "64")
-                if [ $? -eq 1 ]; then
-                    return 1
-                fi
-                modrm_byte="${modrm_byte}${memory_info}"
-            fi
-        fi
     fi
 
-    # Combine mod, reg, and r/m fields to form ModRM byte
-    modrm_byte="${mod}${modrm_byte}"
-
-    echo "ModRM Byte: ${modrm_byte}"
+    echo "${bytes[@]}"
+#    if [[ $1 =~ ^r[a-z0-9]+,[0-9]+$ ]]; then
+	# detected mov register,immediate
+	
+#        opcode+=""
+#    elif [[ $1 =~ ^r[a-z0-9]+,r[a-z0-9]+*$ ]]; then
+	# detected niv register,register
+#        echo "opcode: 89"
+#    elif [[ $1 =~ ^r[a-z0-9]+,[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+	# detected mov register,memory
+#        echo "opcode: 8B"
+#    else
+#        echo "Unknown mov type: $1"
+#	exit 1
+#    fi
 }
 
-function evaluate_expr() {
-    local expr="$1"
-    echo "$((expr))"
+
+function encode_opcode() {
+    local instruction=$1
+    shift # shift parameters left, discarding the first
+    echo `$instruction $@`
 }
 
-function hex_to_binary() {
-    local hex="$1"
-    local binary=""
-    for ((i = 0; i  < ${#hex}; i += 2)); do
-	binary+="\x${hex:$i:2}"
-    done
-    printf "%b" "$binary"
+function encode_modrm() {
+    local instruction=$1
+    shift
+    local operands="$@"
+    local modrm=""
+
+    # TODO: implement this
+    # if any operand contains [register/memory + disp]
+    # if disp is less than 128 MOD must == 01
+    # else MOD must == 10
+    # else if any operand contains [register/memory] MOD must == 00
+    # else if all operands are register/memory MOD must == 11
+
+    # REG == register_encode operand1
+    # R/M == register_encode operand2
+    
+    local pattern='(^\s*(\[.*\])\s*$)|(^\s*([0-9]+)\s*$)|(^\s*(AL|CL|DL|BL|AH|S[PI]L|CH|B[PI]L|D[HI]L|R[8-9]?[LBWD]?|XMM[0-9]+|YMM[0-9]+|ES|CS|SS|DS|FS|GS|CR[0-9]+|DR[0-9]+)\s*$)'
+    if [[ $operands =~ $pattern ]]; then
+	if [[ ${BASH_REMATCH[2]} ]]; then
+	    modrm+="10"
+	elif [[ ${BASH_REMATCH[4]} ]]; then
+	    modrm+="10"
+	elif [[ ${BASH_REMATCH[6]} ]]; then
+	    modrm+="00"
+	fi
+    fi
+
+    echo "MOD field: $modfield"
+}
+
+# Takes label name as parameter, finds the org address. then increments the number based on how many bytes passed up until that label.
+# returns the address
+function calculate_label_address() {
+    local label_name=$1
+    local address
+#    for line in "${line_array[@]}"; do
+#    done
+    
 }
 
 function parse_db() {
-    local line="$1"
-    hex_expr="${line#*0x}"
-    hex_value="${hex_expr%%[ ,+-/*]*}"
-    if [[ "$hex_expr" == *'+'* || "$hex_expr" == *'-'* || "$hex_expr" == *'*'* || "$hex_expr" == *'/'* ]]; then
-	eval_result=$(evaluate_expr "$hex_expr")
-	echo "$(hex_to_binary "$eval_result")"
-    else
-	echo "$(hex_to_binary "$hex_value")"
-    fi
-}
-
-function get_bit() {
-    if (($2 < 0 || $2 >= 64)); then
-	echo "bit selection is outside valid range"
-	exit 1
-    fi
-    local bit=$(( ($1 >> $2) & 1 ))
-    echo $bit
-    return 0
-}
-
-function set_bit() {
-    if (($2 < 0 || $2 >= 64)); then
-	echo "bit selection is outside valid range"
-	exit 1
-    fi
-    local num=$1
-
-    num=$((num & ~(1 << $2)))
-    num=$((num | ($3 << $2)))
-    eval "$1=$num"
-    return 0
-}
-
-
-function parse_line() {
-    str="$1"
-    str=`skip_space "$str"`
-    if [[ $str == '\n' ]]; then
-	return 0
-    fi
-    echo $str
-}
-
-function load_code() {
-    echo `parse_line "${code_array[$1]}"`
-}
-
-function is_register() {
-    for reg in ${valid_registers[@]}; do
-	if [ "$1" == "$reg" ]; then
-	    return 0
+    local hex_values=()
+    for entry in "$@"; do	
+	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
+	if [[ $entry =~ $regex ]]; then
+	    local data="${BASH_REMATCH[0]}"
+	    IFS=',' read -ra values <<< "$data"
+	    for value in "${values[@]}"; do
+		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
+		    value="${value#0x}"
+		    hex_values+=("${value}")
+		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
+		    ascii_string="${BASH_REMATCH[1]}"
+		    for ((i = 0; i < ${#ascii_string}; i++)); do
+			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
+		    done
+		fi
+	    done
 	fi
     done
-    return 1
+    echo "${hex_values[*]}"
 }
 
-function read_register() {
-    if [[ -v $1 ]]; then
-	eval ret="\$$1"
-	echo $ret
-	return 0
-    fi
-
-    echo "READ: Unknown register $1."
-    exit 1
+function parse_dw() {
+    local hex_values=()
+    for entry in "$@"; do
+	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
+	if [[ $entry =~ $regex ]]; then
+	    local data="${BASH_REMATCH[0]}"
+	    IFS=',' read -ra values <<< "$data"
+	    for value in "${values[@]}"; do
+		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
+		    value="${value#0x}"
+		    hex_values+=("${value:2:2}")
+		    hex_values+=("${value:0:2}")
+		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
+		    ascii_string="${BASH_REMATCH[1]}"
+		    for ((i = 0; i < ${#ascii_string}; i++)); do
+			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
+		    done
+		fi
+	    done
+	fi
+    done
+    echo "${hex_values[*]}"
 }
 
-function set_register() {
-    if [[ -v $1 ]]; then
-	eval "$1=\"$2\""
-	return 0 # Success (true)
-    fi
-
-    echo "SET: Unknown register $1."
-    exit 1
+function parse_dd() {
+    local hex_values=()
+    for entry in "$@"; do
+	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
+	if [[ $entry =~ $regex ]]; then
+	    local data="${BASH_REMATCH[0]}"
+	    IFS=',' read -ra values <<< "$data"
+	    for value in "${values[@]}"; do
+		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
+		    value="${value#0x}"
+		    hex_values+=("${value:6:2}")
+		    hex_values+=("${value:4:2}")
+		    hex_values+=("${value:2:2}")
+		    hex_values+=("${value:0:2}")
+		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
+		    ascii_string="${BASH_REMATCH[1]}"
+		    for ((i = 0; i < ${#ascii_string}; i++)); do
+			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
+		    done
+		fi
+	    done
+	fi
+    done
+    echo "${hex_values[*]}"
 }
 
-function execute() {
-    IFS=' ' read -ra components <<< $1
-    if is_label "${components[0]}"; then
-	return 0
-    fi
+function parse_dq() {
+    local hex_values=()
+    for entry in "$@"; do
+	if is_label $entry; then
+	    calculate_label_address $entry
+	fi
+	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
+	if [[ $entry =~ $regex ]]; then
+	    local data="${BASH_REMATCH[0]}"
+	    IFS=',' read -ra values <<< "$data"
+	    for value in "${values[@]}"; do
+		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
+		    value="${value#0x}"
+		    hex_values+=("${value:14:2}")
+		    hex_values+=("${value:12:2}")
+		    hex_values+=("${value:10:2}")
+		    hex_values+=("${value:8:2}")
+		    hex_values+=("${value:6:2}")
+		    hex_values+=("${value:4:2}")
+		    hex_values+=("${value:2:2}")
+		    hex_values+=("${value:0:2}")
+		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
+		    ascii_string="${BASH_REMATCH[1]}"
+		    for ((i = 0; i < ${#ascii_string}; i++)); do
+			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
+		    done
+		fi
+	    done
+	fi
+    done
+    echo "${hex_values[*]}"
+}
+
+
+
+function main() {
+    local org_address
+    local byte_count=0
+    local -A labels
     
-    for inst in ${registered_instructions[@]}; do
-	if [ "${components[0]}" == "$inst" ]; then
-	    $inst ${components[1]}
-	    return 0
+    # FIRST PASS, JUST RECORD THE BYTE LENGTHS
+    for index in "${!line_array[@]}"; do
+	local line="${line_array[$index]}"
+	IFS=' ' read -ra words <<< "$line" # extract first word
+	if [[ "${words[0]}" == "BITS" ]]; then
+	    continue # we do not currently support anything other than x64, so this is useless
+	fi
+
+	if [[ "${words[0]}" == "org" ]]; then
+	    org_address="${line##* }"
+	    continue
+	fi
+
+	if [[ "${words[0]}" == "db" ]]; then
+	    byte_count=$(( $byte_count + 0x1 ))
+	fi
+
+	if [[ "${words[0]}" == "dw" ]]; then
+	    byte_count=$(( $byte_count + 0x2 ))
+	fi
+
+	if [[ "${words[0]}" == "dd" ]]; then
+	    byte_count=$(( $byte_count + 0x4 ))
+	fi
+
+	if [[ "${words[0]}" == "dq" ]]; then
+	    byte_count=$(( $byte_count + 0x8 ))
+	fi
+
+	if [[ "${words[0]}" == "mov" ]]; then
+	    IFS=',' read op1 op2 <<< ${words[1]}
+	    
+	    local opcode=`mov $op1 $op2`
+	    byte_count=$(( $byte_count + (0x4 * ${#opcode[@]}) ))
+	fi
+
+	if [[ "${words[0]}" == "syscall" ]]; then
+	    local opcode=`syscall`
+	    byte_count=$(( $byte_count + (0x4 * ${#opcode[@]}) ))
+	fi
+
+	if is_label ${words[0]}; then
+	    labels[${words[0]%?}]=$(( $org_address + $byte_count ))
+	    line_array[$index]= # remove those lines
+	fi
+
+    done
+
+    remove_empty_lines
+    
+    # SECOND PASS, RESOLVE LABEL ADDRESSES AND REMOVE THE LINES
+    for label in "${!labels[@]}"; do
+	local label_address="${labels[$label]}"
+	label_address=`printf "0x%X" "$label_address"`
+	for index in "${!line_array[@]}"; do
+	    local line="${line_array[$index]}"
+	    IFS=' ' read -ra words <<< "$line" # extract first word
+	    # replace any text matching $label with $label_address
+	    line_array[$index]=${line_array[$index]//$label/$label_address}
+	done
+    done
+
+    for index in "${!line_array[@]}"; do
+	local line="${line_array[$index]}"
+	IFS=' ' read -ra words <<< "$line" # extract first word
+	# replace any text matching $label with $label_address
+	line_array[$index]=${line_array[$index]//$label/$label_address}
+	if [[ "${words[0]}" == "db" ]]; then
+	    
+	    local result=`printf "0x%02X" "$((${words[1]}))"`
+	    echo "WORD: ${words[1]} RESULT: $result"
+	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
+	fi
+
+	if [[ "${words[0]}" == "dw" ]]; then
+	    local result=`printf "0x%04X" "$((${words[1]}))"`
+	    echo "WORD: ${words[1]} RESULT: $result"
+	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
+	fi
+
+	if [[ "${words[0]}" == "dd" ]]; then
+	    local result=`printf "0x%08X" "$((${words[1]}))"`
+	    echo "WORD: ${words[1]} RESULT: $result"
+	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
+	fi
+
+	if [[ "${words[0]}" == "dq" ]]; then
+	    local result=`printf "0x%016X" "$((${words[1]}))"`
+	    echo "WORD: ${words[1]} RESULT: $result"
+	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
+	fi
+
+    done
+
+    
+    remove_empty_lines
+
+    local bytes=()
+    # THIRD PASS, CONVERT TO BYTES!!!
+    for line in "${line_array[@]}"; do
+	IFS=' ' read -ra words <<< "$line" # extract first word
+	if [[ "${words[0]}" == "BITS" ]]; then
+	    continue # we do not currently support anything other than x64, so this is useless
+	fi
+
+	if [[ "${words[0]}" == "db" ]]; then
+	    local reversed=`parse_db ${words[1]}`
+	    
+	    for ((i = 0; i < ${#reversed}; i++)); do
+		bytes+=("${reversed[i]}")
+	    done
+	    
+	fi
+
+	if [[ "${words[0]}" == "dw" ]]; then
+	    local reversed=`parse_dw ${words[1]}`
+	    
+	    for ((i = 0; i < ${#reversed}; i++)); do
+		bytes+=("${reversed[i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "dd" ]]; then
+	    local reversed=`parse_dd ${words[1]}`
+	    
+	    for ((i = 0; i < ${#reversed}; i++)); do
+		bytes+=("${reversed[i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "dq" ]]; then
+	    local reversed=`parse_dq ${words[1]}`
+	    
+	    for ((i = 0; i < ${#reversed}; i++)); do
+		bytes+=("${reversed[i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "mov" ]]; then
+	    IFS=',' read op1 op2 <<< ${words[1]}
+	    local inst=`mov $op1 $op2`
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "syscall" ]]; then
+	    local opcode=`syscall`
+	    for ((i = 0; i < ${#opcode[@]}; i++)); do
+		bytes+=("${opcode[$i]}")
+	    done
 	fi
     done
 
-    echo "Unknown operation ${components[0]}."
-    return 1
-}
-
-function read_text() {
-    local text_line=`find_label "$1:"`
-    ((text_line++))
-    local text=`load_code "$text_line"`
-    # TODO: Implement parser (read char by char)
-    IFS="'" read -ra components <<< $text
-    echo ${components[1]}
-    return 0
-}
-
-
-function find_label() {
-    local line_number=0
-    for line in "${code_array[@]}"; do
-	if [[ "$1" == "$line" ]]; then
-	    echo $line_number
-	    return 0
-	fi
-	((line_number++))
+    byte_string=""
+    for byte in "${bytes[@]}"; do
+	byte_string="${byte_string}${byte}"
     done
-    echo "Error: $1 not found."
-    exit 1
-}
+    byte_string="${byte_string// /}"
 
-
-main() {
-    # you have to find the start first
-    ip=`find_label "START:"`
-    while true; do
-	code=`load_code "$ip"`
-	execute "$code"
-	((ip++))
+    final_bytes=()
+    for ((i = 0; i < ${#byte_string}; i += 2)); do
+	byte="\x${byte_string:$i:2}"
+	final_bytes+=("$byte")
     done
+
+
+    printf "%b" "${final_bytes[@]}" > a.out
+    chmod +x a.out
 }
+
+
+main
+
+mov eax 60
 
 for line in "${line_array[@]}"; do
     echo "$line"
 done
-
-
-# Test cases
-test_instruction() {
-  local instruction="$1"
-  local expected_result="$2"
-
-  needs_rex_prefix "$instruction"
-  actual_result=$?
-
-  if [ "$actual_result" -eq "$expected_result" ]; then
-    echo "PASS: $instruction - Expected: $expected_result, Actual: $actual_result"
-  else
-    echo "FAIL: $instruction - Expected: $expected_result, Actual: $actual_result"
-  fi
-}
