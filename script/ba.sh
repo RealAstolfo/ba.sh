@@ -140,7 +140,7 @@ function remove_empty_lines() {
 }
 
 function is_register() {
-    local reg=$1
+    local reg=${1^^} # ensures always capitalized
     case $reg in
 	AL|AX|EAX|RAX|ST0|MMX0|XMM0|YMM0|ES|CR0|DR0|CL|CX|ECX|RCX|ST1|MMX1|XMM1|YMM1|CS|CR1|DR1|DL|DX|EDX|RDX|ST2|MMX2|XMM2|YMM2|SS|CR2|DR2|BL|BX|EBX|RBX|ST3|MMX3|XMM3|YMM3|DS|CR3|DR3|AH|SPL|SP|ESP|RSP|ST4|MMX4|XMM4|YMM4|FS|CR4|DR4|CH|BPL|BP|EBP|RBP|ST5|MMX5|XMM5|YMM5|GS|CR5|DR5|DH|SIL|SI|ESI|RSI|ST6|MMX6|XMM6|YMM6|CR6|DR6|BH|DIL|DI|EDI|RDI|ST7|MMX7|XMM7|YMM7|CR7|DR6|R8L|R8W|R8D|R8|MMX0|XMM8|YMM8|ES|CR8|DR8|R9L|R9W|R9D|R9|MMX1|XMM9|YMM9|CS|CR9|DR9|R10L|R10W|R10D|R10|MMX2|XMM10|YMM10|SS|CR10|DR10|R11L|R11W|R11D|R11|MMX3|XMM11|YMM11|DS|CR11|DR11|R12L|R12W|R12D|R12|MMX4|XMM12|YMM12|FS|CR12|DR12|R13L|R13W|R13D|R13|MMX5|XMM13|YMM13|GS|CR13|DR13|R14L|R14W|R14D|R14|MMX6|XMM14|YMM14|CR14|DR14|R15L|R15W|R15D|R15|MMX7|XMM15|YMM15|CR15|DR15)
 	    return 0
@@ -665,44 +665,31 @@ function main() {
     # FIRST PASS, JUST RECORD THE BYTE LENGTHS
     for index in "${!line_array[@]}"; do
 	local line="${line_array[$index]}"
-	IFS=' ' read -ra words <<< "$line" # extract first word
-	if [[ "${words[0]}" == "BITS" ]]; then
-	    continue # we do not currently support anything other than x64, so this is useless
-	fi
-
-	if [[ "${words[0]}" == "org" ]]; then
-	    org_address="${line##* }"
-	    continue
-	fi
-
-	if [[ "${words[0]}" == "db" ]]; then
-	    byte_count=$(( $byte_count + 0x1 ))
-	fi
-
-	if [[ "${words[0]}" == "dw" ]]; then
-	    byte_count=$(( $byte_count + 0x2 ))
-	fi
-
-	if [[ "${words[0]}" == "dd" ]]; then
-	    byte_count=$(( $byte_count + 0x4 ))
-	fi
-
-	if [[ "${words[0]}" == "dq" ]]; then
-	    byte_count=$(( $byte_count + 0x8 ))
-	fi
-
-	if [[ "${words[0]}" == "mov" ]]; then
-	    IFS=',' read op1 op2 <<< ${words[1]}
-	    
-	    local opcode=`mov $op1 $op2`
-	    byte_count=$(( $byte_count + (0x4 * ${#opcode[@]}) ))
-	fi
-
-	if [[ "${words[0]}" == "syscall" ]]; then
-	    local opcode=`syscall`
-	    byte_count=$(( $byte_count + (0x4 * ${#opcode[@]}) ))
-	fi
-
+	IFS=' ' read -ra words <<< "$line"
+	case "${words[0]}" in
+	    BITS)
+		continue ;;
+	    org)
+		org_address="${words[1]}" ;;
+	    db)
+		byte_count=$(( $byte_count + 0x1 )) ;;
+	    dw)
+		byte_count=$(( $byte_count + 0x2 )) ;;
+	    dd)
+		byte_count=$(( $byte_count + 0x4 )) ;;
+	    dq)
+		byte_count=$(( $byte_count + 0x8 )) ;;
+	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
+		IFS=',' read op1 op2 <<< ${words[1]}
+		local inst=`mov $op1 $op2`
+		byte_count=$(( $byte_count + (0x4 * ${#inst[@]}) ))
+		;;
+	    syscall)
+		local inst=`syscall`
+		byte_count=$(( $byte_count + (0x4 * ${#inst[@]}) ))
+		;;
+	esac
+	
 	if is_label ${words[0]}; then
 	    labels[${words[0]%?}]=$(( $org_address + $byte_count ))
 	    line_array[$index]= # remove those lines
