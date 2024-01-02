@@ -516,20 +516,24 @@ function mov() {
 
 
 	local reg_size=`size_of_register ${operands[0]^^}`
-	if [ $reg_size -eq 8 ]; then
-	    immediate=`printf "%02X" "${operands[1]}"`
-	    opcode=(`printf "%02X" "$(( 0xB0 | 0x$regcode ))"`)
-	elif [ $reg_size -eq 16 ]; then
-	    immediate=`printf "%04X" "${operands[1]}"`
-	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
-	elif [ $reg_size -eq 32 ]; then
-	    immediate=`printf "%08X" "${operands[1]}"`
-	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
-	elif [ $reg_size -eq 64 ]; then
-	    immediate=`printf "%016X" "${operands[1]}"`
-	    opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`)
-	fi
+	case $reg_size in
+	    8)
+		opcode=(`printf "%02X" "$(( 0xB0 | 0x$regcode ))"`) ;;
+	    16|32|64)
+		opcode=(`printf "%02X" "$(( 0xB8 | 0x$regcode ))"`) ;;
+	esac
 
+	case $reg_size in
+	    8)
+		immediate=`printf "%02X" "${operands[1]}"` ;;
+	    16)
+		immediate=`printf "%04X" "${operands[1]}"` ;;
+	    32)
+		immediate=`printf "%08X" "${operands[1]}"` ;;
+	    64)
+		immediate=`printf "%016X" "${operands[1]}"` ;;
+	esac
+	
 	bytes+=("$opcode")
 	local imm_len=${#immediate}
 	# immediates need to be encoded backwards
