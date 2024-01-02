@@ -604,30 +604,9 @@ function calculate_label_address() {
     
 }
 
-function parse_db() {
-    local hex_values=()
-    for entry in "$@"; do	
-	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
-	if [[ $entry =~ $regex ]]; then
-	    local data="${BASH_REMATCH[0]}"
-	    IFS=',' read -ra values <<< "$data"
-	    for value in "${values[@]}"; do
-		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
-		    value="${value#0x}"
-		    hex_values+=("${value}")
-		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
-		    ascii_string="${BASH_REMATCH[1]}"
-		    for ((i = 0; i < ${#ascii_string}; i++)); do
-			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
-		    done
-		fi
-	    done
-	fi
-    done
-    echo "${hex_values[*]}"
-}
-
-function parse_dw() {
+function parse_data() {
+    local data_type="$1" # "db", "dw", etc
+    shift
     local hex_values=()
     for entry in "$@"; do
 	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
@@ -637,8 +616,31 @@ function parse_dw() {
 	    for value in "${values[@]}"; do
 		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
 		    value="${value#0x}"
-		    hex_values+=("${value:2:2}")
-		    hex_values+=("${value:0:2}")
+		    case $data_type in
+			"db")
+			    hex_values+=("${value}")
+			    ;;
+			"dw")
+			    hex_values+=("${value:2:2}")
+			    hex_values+=("${value:0:2}") 
+			    ;;
+			"dd")
+			    hex_values+=("${value:6:2}")
+			    hex_values+=("${value:4:2}")
+			    hex_values+=("${value:2:2}")
+			    hex_values+=("${value:0:2}")
+			    ;;
+			"dq")
+			    hex_values+=("${value:14:2}")
+			    hex_values+=("${value:12:2}")
+			    hex_values+=("${value:10:2}")
+			    hex_values+=("${value:8:2}")
+			    hex_values+=("${value:6:2}")
+			    hex_values+=("${value:4:2}")
+			    hex_values+=("${value:2:2}")
+			    hex_values+=("${value:0:2}")
+			    ;;
+		    esac
 		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
 		    ascii_string="${BASH_REMATCH[1]}"
 		    for ((i = 0; i < ${#ascii_string}; i++)); do
@@ -650,67 +652,6 @@ function parse_dw() {
     done
     echo "${hex_values[*]}"
 }
-
-function parse_dd() {
-    local hex_values=()
-    for entry in "$@"; do
-	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
-	if [[ $entry =~ $regex ]]; then
-	    local data="${BASH_REMATCH[0]}"
-	    IFS=',' read -ra values <<< "$data"
-	    for value in "${values[@]}"; do
-		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
-		    value="${value#0x}"
-		    hex_values+=("${value:6:2}")
-		    hex_values+=("${value:4:2}")
-		    hex_values+=("${value:2:2}")
-		    hex_values+=("${value:0:2}")
-		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
-		    ascii_string="${BASH_REMATCH[1]}"
-		    for ((i = 0; i < ${#ascii_string}; i++)); do
-			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
-		    done
-		fi
-	    done
-	fi
-    done
-    echo "${hex_values[*]}"
-}
-
-function parse_dq() {
-    local hex_values=()
-    for entry in "$@"; do
-	if is_label $entry; then
-	    calculate_label_address $entry
-	fi
-	local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
-	if [[ $entry =~ $regex ]]; then
-	    local data="${BASH_REMATCH[0]}"
-	    IFS=',' read -ra values <<< "$data"
-	    for value in "${values[@]}"; do
-		if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
-		    value="${value#0x}"
-		    hex_values+=("${value:14:2}")
-		    hex_values+=("${value:12:2}")
-		    hex_values+=("${value:10:2}")
-		    hex_values+=("${value:8:2}")
-		    hex_values+=("${value:6:2}")
-		    hex_values+=("${value:4:2}")
-		    hex_values+=("${value:2:2}")
-		    hex_values+=("${value:0:2}")
-		elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
-		    ascii_string="${BASH_REMATCH[1]}"
-		    for ((i = 0; i < ${#ascii_string}; i++)); do
-			hex_values+=("$(printf "%02X" "'${ascii_string:$i:1}")")
-		    done
-		fi
-	    done
-	fi
-    done
-    echo "${hex_values[*]}"
-}
-
-
 
 function main() {
     local org_address
@@ -787,25 +728,21 @@ function main() {
 	if [[ "${words[0]}" == "db" ]]; then
 	    
 	    local result=`printf "0x%02X" "$((${words[1]}))"`
-	    echo "WORD: ${words[1]} RESULT: $result"
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
 	fi
 
 	if [[ "${words[0]}" == "dw" ]]; then
 	    local result=`printf "0x%04X" "$((${words[1]}))"`
-	    echo "WORD: ${words[1]} RESULT: $result"
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
 	fi
 
 	if [[ "${words[0]}" == "dd" ]]; then
 	    local result=`printf "0x%08X" "$((${words[1]}))"`
-	    echo "WORD: ${words[1]} RESULT: $result"
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
 	fi
 
 	if [[ "${words[0]}" == "dq" ]]; then
 	    local result=`printf "0x%016X" "$((${words[1]}))"`
-	    echo "WORD: ${words[1]} RESULT: $result"
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
 	fi
 
@@ -822,39 +759,15 @@ function main() {
 	    continue # we do not currently support anything other than x64, so this is useless
 	fi
 
-	if [[ "${words[0]}" == "db" ]]; then
-	    local reversed=`parse_db ${words[1]}`
-	    
-	    for ((i = 0; i < ${#reversed}; i++)); do
-		bytes+=("${reversed[i]}")
+	
+	case "${words[0]}" in
+	    db|dw|dd|dq)
+	    local data=`parse_data "${words[0]}" "${words[1]}"`
+	    for ((i = 0; i < ${#data}; i++)); do
+		bytes+=("${data[i]}")
 	    done
-	    
-	fi
-
-	if [[ "${words[0]}" == "dw" ]]; then
-	    local reversed=`parse_dw ${words[1]}`
-	    
-	    for ((i = 0; i < ${#reversed}; i++)); do
-		bytes+=("${reversed[i]}")
-	    done
-	fi
-
-	if [[ "${words[0]}" == "dd" ]]; then
-	    local reversed=`parse_dd ${words[1]}`
-	    
-	    for ((i = 0; i < ${#reversed}; i++)); do
-		bytes+=("${reversed[i]}")
-	    done
-	fi
-
-	if [[ "${words[0]}" == "dq" ]]; then
-	    local reversed=`parse_dq ${words[1]}`
-	    
-	    for ((i = 0; i < ${#reversed}; i++)); do
-		bytes+=("${reversed[i]}")
-	    done
-	fi
-
+	esac
+	
 	if [[ "${words[0]}" == "mov" ]]; then
 	    IFS=',' read op1 op2 <<< ${words[1]}
 	    local inst=`mov $op1 $op2`
@@ -890,8 +803,6 @@ function main() {
 
 
 main
-
-mov eax 60
 
 for line in "${line_array[@]}"; do
     echo "$line"
