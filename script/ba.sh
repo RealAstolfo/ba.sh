@@ -307,7 +307,7 @@ preprocess_assembly $1
 ###################################################################
 
 function encode_register() {
-    local reg=$1
+    local reg=${1^^} # ensures it is always captilized
     case $reg in
 	AL|AX|EAX|RAX|ST0|MMX0|XMM0|YMM0|ES|CR0|DR0)
 	    printf "%02X" "$((2#0000))" ;;
@@ -345,7 +345,7 @@ function encode_register() {
 }
 
 function size_of_register() {
-    local reg=$1
+    local reg=${1^^} # ensures its always capitalized
     case $reg in
 	AL|CL|DL|BL|AH|SPL|CH|BPL|DH|SIL|BH|DIL|R8L|R9L|R10L|R11L|R12L|R13L|R14L|R15L)
 	    printf "%d" "8" ;;
@@ -729,27 +729,23 @@ function main() {
 	IFS=' ' read -ra words <<< "$line" # extract first word
 	# replace any text matching $label with $label_address
 	line_array[$index]=${line_array[$index]//$label/$label_address}
-	if [[ "${words[0]}" == "db" ]]; then
-	    
-	    local result=`printf "0x%02X" "$((${words[1]}))"`
-	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
-	fi
 
-	if [[ "${words[0]}" == "dw" ]]; then
-	    local result=`printf "0x%04X" "$((${words[1]}))"`
-	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
-	fi
+	local result
+	case "${words[0]}" in
+	    db)
+		result=`printf "0x%02X" "$((${words[1]}))"` ;;
+	    dw)
+		result=`printf "0x%04X" "$((${words[1]}))"` ;;
+	    dd)
+		result=`printf "0x%08X" "$((${words[1]}))"` ;;
+	    dq)
+		result=`printf "0x%016X" "$((${words[1]}))"` ;;
+	esac
 
-	if [[ "${words[0]}" == "dd" ]]; then
-	    local result=`printf "0x%08X" "$((${words[1]}))"`
+	if [[ -v result ]]; then
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
+	    unset result
 	fi
-
-	if [[ "${words[0]}" == "dq" ]]; then
-	    local result=`printf "0x%016X" "$((${words[1]}))"`
-	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
-	fi
-
     done
 
     
