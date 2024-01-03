@@ -504,8 +504,18 @@ function encode_rex_prefix() {
 # this way jmp can just determine the best opcode for the operand its given.
 # destination - (source + sizeof(instruction))
 # AKA, dst - end_of_jmp
-# function jmp() {
-# }
+function jmp() {
+    local op1=$(( $1 ))
+    bytes=()
+    if [[ $op1 -ge -128 && $op1 -le 127 ]]; then
+	# JMP rel8
+	bytes+=("EB")
+	# for some reason, despite specifying %02, it does FF's all the way to 8bytes
+	local format=`printf "%02X" "$(( op1 & 0xFF ))"` 
+	bytes+=("$format")
+    fi
+    echo "${bytes[@]}"
+}
 
 function syscall() {
     local opcode=()
@@ -669,7 +679,7 @@ function parse_data() {
 	    done
 	fi
     done
-    echo "${hex_values[*]}"
+    echo ${hex_values[@]}
 }
 
 function main() {
@@ -677,7 +687,7 @@ function main() {
     local byte_count=0
     local -A labels
     
-    # FIRST PASS, JUST RECORD THE BYTE LENGTHS
+    # FIRST PASS, JUST RECORD THE BYTE LENGTHS    
     for index in "${!line_array[@]}"; do
 	local line="${line_array[$index]}"
 	IFS=' ' read -ra words <<< "$line"
@@ -697,11 +707,18 @@ function main() {
 	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
 		IFS=',' read op1 op2 <<< ${words[1]}
 		local inst=`mov $op1 $op2`
-		byte_count=$(( $byte_count + (0x4 * ${#inst[@]}) ))
+		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	    syscall)
 		local inst=`syscall`
-		byte_count=$(( $byte_count + (0x4 * ${#inst[@]}) ))
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		;;
+	    jmp)
+		# TODO: make extra parsing to check the smallest the instruction can be?
+		local inst=`jmp 0` # TODO: Figure out how to handle literally anything bigger than 8bits
+		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) + 1 ))
+		local inst=`jmp $rel` # TODO: Figure out how to handle literally anything bigger than 8bits
+		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	esac
 	
@@ -729,9 +746,6 @@ function main() {
     for index in "${!line_array[@]}"; do
 	local line="${line_array[$index]}"
 	IFS=' ' read -ra words <<< "$line" # extract first word
-	# replace any text matching $label with $label_address
-	line_array[$index]=${line_array[$index]//$label/$label_address}
-
 	local result
 	case "${words[0]}" in
 	    db)
@@ -752,7 +766,7 @@ function main() {
 
     
     remove_empty_lines
-
+    
     local bytes=()
     # THIRD PASS, CONVERT TO BYTES!!!
     for line in "${line_array[@]}"; do
@@ -764,10 +778,11 @@ function main() {
 	
 	case "${words[0]}" in
 	    db|dw|dd|dq)
-	    local data=`parse_data "${words[0]}" "${words[1]}"`
-	    for ((i = 0; i < ${#data}; i++)); do
-		bytes+=("${data[i]}")
-	    done
+		# bash apparently assumes return is a string with spaces... hours wasted
+		local data=(`parse_data "${words[0]}" "${words[1]}"`) 
+		for byte in "${data[@]}"; do
+		    bytes+=("$byte")
+		done
 	esac
 	
 	if [[ "${words[0]}" == "mov" ]]; then
@@ -786,7 +801,12 @@ function main() {
 	fi
 
 	if [[ "${words[0]}" == "jmp" ]]; then
-	    local inst=`jmp ${words[1]}`
+	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
+ 	    # TODO: make extra parsing to check the smallest the instruction can be?
+	    local inst=`jmp 0` # TODO: Figure out how to handle literally anything bigger than 8bits
+	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]} + 1) ))
+	    local inst=`jmp $rel` # TODO: Figure out how to handle literally anything bigger than 8bits
+
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[$i]}")
 	    done
