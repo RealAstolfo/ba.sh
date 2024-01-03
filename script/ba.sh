@@ -97,7 +97,7 @@ function is_define() {
     return 1
 }
 
-declare -A asm_macros
+declare -A asm_macro
 function is_macro() {
     if [[ $1 == "%macro"* ]]; then
 	return 0
@@ -111,6 +111,22 @@ function is_endmacro() {
     fi
     return 1
 }
+
+function is_ifndef() {
+    if [[ $1 == "%ifndef"* ]]; then
+	return 0
+    fi
+    return 1
+}
+
+function is_endif() {
+    if [[ $1 == "%endif" ]]; then
+	return 0
+    fi
+    return 1
+}
+
+
 
 # seems like shorthand to make nasm repeat the following X times each line.
 function is_times() {
@@ -175,6 +191,7 @@ function preprocess_assembly() {
 	line_array[$index]=`skip_space "${line_array[$index]}"`
     done
 
+
     # find all assembly %include directives
     local check_again=true
     while [[ $check_again == true ]]; do
@@ -226,6 +243,8 @@ function preprocess_assembly() {
             done
 	done
     done
+
+    remove_empty_lines
     
     # find all assembly %macro and %endmacro directives
     local current_macro
@@ -446,54 +465,41 @@ function needs_rex_prefix() {
 
 function encode_rex_prefix() {
     local registers=("$@")
-
+    
     local max_size=0
-    local extended_register=false
+    local rex_r=false
+    local rex_x=false  # New: For SIB index
+    local rex_b=false  # New: For ModR/M or SIB base
+
     for register in "${registers[@]}"; do
-	local size=size_of_register $register
-	if [ $size > $max_size ]; then
-	    max_size=$size
-	fi
+        local size=`size_of_register $register`
+        if [ $size > $max_size ]; then
+            max_size=$size
+        fi
 
-	case $register in
-	    R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM1[0-5]|CR[8-9]|CR1[0-5]|DR[8-9]|DR1[0-5]|SPL|BPL|SIL|DIL)
-		extended_register=true ;;
-	esac
+        case $register in
+            R[8-9]|R1[0-5])
+                rex_r=true ;;
+            # Add logic to set rex_x and rex_b based on the use of extended registers as index or base
+            # Example: If your instruction format or addressing mode uses R8-R15 as index/base
+            # set rex_x or rex_b to true accordingly
+            # You will need to adjust this based on your specific instruction format and addressing
+        esac
     done
+
+    local rex_prefix="0100"  # Fixed bits
+
+    # Set the W bit
+    [ "$max_size" == 64 ] && rex_prefix+="1" || rex_prefix+="0"
+
+    # Set the R bit
+    [[ "$rex_r" == true ]] && rex_prefix+="1" || rex_prefix+="0"
+
     
-    # Initialize the REX prefix byte with fixed bits (0100)
-    local rex_prefix="0100"
-
-    # Set the W bit based on the operand size
-    if [[ "$max_size" == "64" ]]; then
-	rex_prefix+="1"
-    else
-	rex_prefix+="0"
-    fi
-
-    if [[ $extended_register == true ]]; then
-	rex_prefix+="1"
-    else
-	rex_prefix+="0"
-    fi
-    
-
-    # Set the X and B bits to 0
-    # X Bit (Bit 1):
-    # The X bit indicates whether an SSE, AVX, or AVX-512 register is used as an index in a memory addressing calculation.
-    # If any of the registers in your list are SSE, AVX, or AVX-512 registers used as an index,
-    # then you should set the X bit to 1; otherwise, it should be set to 0.
-
-    # B Bit (Bit 2):
-    # The B bit indicates whether the R8-R15, XMM8-XMM15, or YMM8-YMM15 registers
-    # are used as the base in a memory addressing calculation.
-    # If any of the registers in your list are R8-R15, XMM8-XMM15, or YMM8-YMM15 registers used as the base,
-    # then you should set the B bit to 1; otherwise, it should be set to 0.
-
-    # TODO: Implement this logic to support index/base addressing with extended registers
-    rex_prefix+="00"
-
-    printf "%02X" "$((16#$rex_prefix))"
+    # Set the X and B bits based on addressing mode (to be implemented)
+    [[ "$rex_x" == true ]] && rex_prefix+="1" || rex_prefix+="0"
+    [[ "$rex_b" == true ]] && rex_prefix+="1" || rex_prefix+="0"
+    printf "%02X" "$((2#$rex_prefix))"
 }
 
 ###################################################################
@@ -533,7 +539,7 @@ function mov() {
     if is_register ${operands[0]^^} && [[ "${operands[1]}" =~ ^[0-9]+$ ]]; then
 	if needs_rex_prefix ${operands[0]^^}; then
 	    local prefix=`encode_rex_prefix ${operands[0]^^}`
-	    #bytes+=("$prefix")
+	    bytes+=("$prefix")
 	fi
 	
 	local regcode=`encode_register ${operands[0]^^}` # ^^ to make it all capital
