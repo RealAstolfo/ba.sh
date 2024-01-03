@@ -500,6 +500,10 @@ function encode_rex_prefix() {
 # OPS
 ###################################################################
 
+# Reminder to parse the following logic before it hits jmp,
+# this way jmp can just determine the best opcode for the operand its given.
+# destination - (source + sizeof(instruction))
+# AKA, dst - end_of_jmp
 # function jmp() {
 # }
 
