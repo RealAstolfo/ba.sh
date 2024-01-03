@@ -1,6 +1,6 @@
-%include "syscalls.asm"	; requires syscall listing for your OS in lib/sys/	
-
-%include "lib/sys/exit.asm"	
+	%include "lib/sys/linux_elf.nasm"
+	%include "syscalls.asm"	; requires syscall listing for your OS in lib/sys/	
+	%include "lib/sys/exit.asm"	
 ; void exit(byte {dil});
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
