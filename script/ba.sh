@@ -452,16 +452,15 @@ function needs_rex_prefix() {
 	    AH|CH|BH|DH)
 		return 1 ;; # no
 	    *)
-		continue ;; # skip
+		;;
 	esac
-	local size=size_of_register $operand
+	local size=`size_of_register $operand`
 	if [ $size -eq 64 ]; then
 	    return 0 # yes
 	fi
     done
-    return 0 # yes
+    return 1 # no
 }
-
 
 function encode_rex_prefix() {
     local registers=("$@")
@@ -520,6 +519,31 @@ function jmp() {
 	local format=`printf "%02X" "$(( op1 & 0xFF ))"` 
 	bytes+=("$format")
     fi
+    echo "${bytes[@]}"
+}
+
+function call() {
+    local op1=$(( $1 ))
+    local rel
+    bytes=()
+    
+#    if [[ $op1 -ge -32768 && $op1 -le 32767 ]]; then
+#	# JMP rel8
+#	bytes+=("E8")
+#	# for some reason, despite specifying %02, it does FF's all the way to 8bytes
+#	rel=`printf "%04X" "$(( op1 & 0xFFFF ))"` 
+ #   else
+    bytes+=("E8")
+    rel=`printf "%08X" "$(( op1 & 0xFFFFFFFF ))"`
+  #  fi
+    
+    
+    local imm_len=${#rel}
+    # rels need to be encoded backwards                                                                                      
+    for ((i = imm_len - 2; i >= 0; i -= 2)); do
+        local byte=${rel:i:2}
+        bytes+=("$byte")
+    done
     echo "${bytes[@]}"
 }
 
@@ -712,18 +736,26 @@ function main() {
 		byte_count=$(( $byte_count + 0x8 )) ;;
 	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
 		IFS=',' read op1 op2 <<< ${words[1]}
-		local inst=`mov $op1 $op2`
+		local inst=(`mov $op1 $op2`)
 		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	    syscall)
-		local inst=`syscall`
+		local inst=(`syscall`)
 		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
+		;;	
 	    jmp)
 		# TODO: make extra parsing to check the smallest the instruction can be?
-		local inst=`jmp 0` # TODO: Figure out how to handle literally anything bigger than 8bits
-		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) + 1 ))
-		local inst=`jmp $rel` # TODO: Figure out how to handle literally anything bigger than 8bits
+		local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
+		local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		;;
+	    call)
+		# TODO: make extra parsing to check the smallest the instruction can be?
+		local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
+		echo "LEN: ${#inst[@]} INST: ${inst[@]} REL: $rel"
+		local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
 		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	esac
@@ -793,14 +825,14 @@ function main() {
 	
 	if [[ "${words[0]}" == "mov" ]]; then
 	    IFS=',' read op1 op2 <<< ${words[1]}
-	    local inst=`mov $op1 $op2`
+	    local inst=(`mov $op1 $op2`)
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[i]}")
 	    done
 	fi
 
 	if [[ "${words[0]}" == "syscall" ]]; then
-	    local inst=`syscall`
+	    local inst=(`syscall`)
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[$i]}")
 	    done
@@ -809,16 +841,29 @@ function main() {
 	if [[ "${words[0]}" == "jmp" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
-	    local inst=`jmp 0` # TODO: Figure out how to handle literally anything bigger than 8bits
-	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]} + 1) ))
-	    local inst=`jmp $rel` # TODO: Figure out how to handle literally anything bigger than 8bits
+	    local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
 
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
+	    done
+	fi
+
+    	if [[ "${words[0]}" == "call" ]]; then
+	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
+ 	    # TODO: make extra parsing to check the smallest the instruction can be?
+	    local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    echo "CALL: `call $rel` REL $rel"
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[$i]}")
 	    done
 	fi
     done
 
+    
     byte_string=""
     for byte in "${bytes[@]}"; do
 	byte_string="${byte_string}${byte}"
