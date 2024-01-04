@@ -14,7 +14,7 @@ START:
 	xor rdi,rdi
 	call exit
 TEXT:
-	db 'hello world!'
+	db "hello world!"
 ADDRESS_AFTER_TEXT:
 
 END:	

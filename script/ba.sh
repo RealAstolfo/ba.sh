@@ -297,7 +297,6 @@ function preprocess_assembly() {
 		local line="${line_array[$index]}"
 		local entry_type="${line%% *}"
 		line=${line#* }
-		echo "LINE ${line[@]}"
 		local within_quote=false
 		local escaped=false
 		local hex_values=()
@@ -337,7 +336,6 @@ function preprocess_assembly() {
 		    esac		    
 		done
 		for hex in "${hex_values[@]}"; do
-		    echo "HEXBYTES: $entry_type $hex"
 		    resolved_lines+=("$entry_type $hex")
 		done
 		check_again=true
@@ -351,8 +349,6 @@ function preprocess_assembly() {
 
 }
 
-# load first file
-preprocess_assembly $1
 
 ###################################################################
 # HELPER
@@ -569,6 +565,20 @@ function syscall() {
     echo "${opcode[@]}"
 }
 
+# "The single-byte-opcode forms of the INC/DEC instructions are not available in 64-bit mode.
+# INC/DEC functionality is still available using ModR/M forms of the same instructions (opcodes FF/0 and FF/1)." 
+function dec() {
+    local bytes=()
+    local operand=$1
+    if is_register $operand; then
+	local size=`size_of_register $operand`
+	if [[ $size -gt 8 ]]; then
+	   bytes+=("FF")
+	fi
+	   
+    fi    
+}
+
 function mov() {
     local operands=("$@")
     local opcode
@@ -595,13 +605,13 @@ function mov() {
 
 	case $reg_size in
 	    8)
-		immediate=`printf "%02X" "${operands[1]}"` ;;
+		immediate=`printf "%02X" "$(( ${operands[1]} ))"` ;;
 	    16)
-		immediate=`printf "%04X" "${operands[1]}"` ;;
+		immediate=`printf "%04X" "$(( ${operands[1]} ))"` ;;
 	    32)
-		immediate=`printf "%08X" "${operands[1]}"` ;;
+		immediate=`printf "%08X" "$(( ${operands[1]} ))"` ;;
 	    64)
-		immediate=`printf "%016X" "${operands[1]}"` ;;
+		immediate=`printf "%016X" "$(( ${operands[1]} ))"` ;;
 	esac
 	
 	bytes+=("$opcode")
@@ -728,6 +738,8 @@ function parse_data() {
 }
 
 function main() {
+    preprocess_assembly
+
     local org_address
     local byte_count=0
     local -A labels
@@ -871,7 +883,6 @@ function main() {
 	    local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
 	    local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    echo "CALL: `call $rel` REL $rel"
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[$i]}")
 	    done
