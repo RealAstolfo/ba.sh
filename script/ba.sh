@@ -41,11 +41,12 @@ function is_db() {
 }
 
 function is_multi_db() {
+    local data_type="$1"
     local input_string="$@"
     local entry_count=0
     local in_quotes=false
 
-    case $1 in
+    case $data_type in
 	db|dw|dd|dq)
 	    ;;
 	*)
@@ -62,6 +63,7 @@ function is_multi_db() {
             if [[ $in_quotes == true ]]; then
                 in_quotes=false
             else
+		((entry_count++))
                 in_quotes=true
             fi
         elif [[ $char == ',' ]]; then
@@ -291,45 +293,58 @@ function preprocess_assembly() {
 	check_again=false
 	for index in "${!line_array[@]}"; do
 	    if is_multi_db ${line_array[$index]}; then
-		IFS=' ' read entry_type entries <<< ${line_array[$index]}
-		local resolved_lines=()
-		local hex_values=()
-		local regex="((0x[0-9A-Fa-f]+|\"[^\"]+\"),?)+"
-		if [[ $entries =~ $regex ]]; then
-		    local data="${BASH_REMATCH[0]}"
-		    IFS=',' read -ra values <<< "$data"
-		    for value in "${values[@]}"; do
-			if [[ $value =~ ^0x[0-9A-Fa-f]+$ ]]; then
-			    hex_values+=("${value}")
-			elif [[ $value =~ ^\"([^\"]+)\"$ ]]; then
-			    ascii_string="${BASH_REMATCH[1]}"
-			    for ((i = 0; i < ${#ascii_string}; i++)); do
-				case $entry_type in
-				    db)
-					hex_values+=("$(printf "0x%02X" "'${ascii_string:$i:1}")") ;;
-				    dw)
-					hex_values+=("$(printf "0x%04X" "'${ascii_string:$i:1}")") ;;
-				    dd)
-					hex_values+=("$(printf "0x%08X" "'${ascii_string:$i:1}")") ;;
-				    dq)
-					hex_values+=("$(printf "0x%16X" "'${ascii_string:$i:1}")") ;;
-				esac
-			    done
-			fi
-		    done
-		fi
 
+		local line="${line_array[$index]}"
+		local entry_type="${line%% *}"
+		line=${line#* }
+		echo "LINE ${line[@]}"
+		local within_quote=false
+		local escaped=false
+		local hex_values=()
+		local resolved_lines=()
+		local word
+		
+		for ((i = 0; i < ${#line}; i++)); do
+		    local char="${line:i:1}"
+		    case $char in
+			\,)
+			    # Test if word is hex
+			    if [[ $word =~ ^0x[0-9A-Fa-f]+$ ]]; then
+				hex_values+=("$word")
+				word=
+			    fi
+			    ;;
+			\\)
+			    escaped=true
+			    ;;
+			\'|\")
+			    if $escaped; then
+				escaped=false
+				hex_values+=("$(printf "0x%02X" "'$char")")
+			    elif $within_quote; then
+				within_quote=false
+			    else
+				within_quote=true
+			    fi
+			    ;;
+			*)
+			    if $within_quote; then
+				hex_values+=("$(printf "0x%02X" "'$char")")
+			    else
+				word="$word$char"
+			    fi
+			    ;;
+		    esac		    
+		done
 		for hex in "${hex_values[@]}"; do
+		    echo "HEXBYTES: $entry_type $hex"
 		    resolved_lines+=("$entry_type $hex")
 		done
-		local new_lines=("${line_array[@]:0:$index}" "${resolved_lines[@]}" "${line_array[@]:$index+1}")
-		line_array=("${new_lines[@]}")		
 		check_again=true
-		break
-		
+		local new_lines=("${line_array[@]:0:$index}" "${resolved_lines[@]}" "${line_array[@]:$index+1}")
+		line_array=("${new_lines[@]}")
 	    fi
 	done
-
     done
 
     remove_empty_lines
