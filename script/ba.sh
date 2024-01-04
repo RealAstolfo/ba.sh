@@ -646,6 +646,58 @@ function dec() {
     echo "${bytes[@]}"
 }
 
+function xor() {
+    local operands=("$@")
+    local bytes=()
+    # register to register
+    if is_register ${operands[0]} && is_register ${operands[1]}; then
+	local prefix=''
+	local size_op0=`size_of_register ${operands[0]}`
+	local size_op1=`size_of_register ${operands[1]}`
+	if [[ $size_op0 != $size_op1 ]]; then
+	    echo "ERROR: REGISTER MISMATCH FOR ${operands[@]}" >&2
+	    exit 1
+	fi
+	
+	
+	if needs_rex_prefix ${operands[@]}; then
+	    prefix+='0100'
+
+	    if [[ $size_op0 -eq 64 ]]; then
+		prefix+='1'
+	    else
+		prefix+='0'
+	    fi
+	    # TODO: support addressing modes
+	    prefix+='0'
+	    # SIB.index not needed here
+	    prefix+='0'
+	    # MODRM.rm / SIB.base field not needed here
+	    prefix+='0'
+	    bytes+=("`printf "%02X" "$((2#$prefix))"`")
+	fi
+
+	if [[ $size_op0 -gt 8 ]]; then
+	   bytes+=("31")
+	fi
+
+	# XOR requires modrm byte
+	local bits=''
+	# XOR using only register
+	bits+='11'
+	local reg_code=`encode_register ${operands[0]}`
+	local reg_binary=`hex_to_binary $reg_code`
+	bits+="${reg_binary:5}" # chop off 5 bits in front, since we wont need it here
+	local reg_code=`encode_register ${operands[1]}`
+	local reg_binary=`hex_to_binary $reg_code`
+	bits+="${reg_binary:5}" # chop off 5 bits in front, since we wont need it here
+	
+	bytes+=("`printf "%02X" "$((2#$bits))"`")
+
+    fi
+    echo "${bytes[@]}"
+}
+
 function mov() {
     local operands=("$@")
     local opcode
@@ -855,6 +907,11 @@ function main() {
 		local inst=(`dec ${words[1]}`)
 		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
+	    xor)
+		IFS=',' read op1 op2 <<< ${words[1]}
+		local inst=(`xor $op1 $op2`)
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		;;
 	esac
 	
 	if is_label ${words[0]}; then
@@ -965,6 +1022,14 @@ function main() {
 	    done	    
 	fi
 	
+	if [[ "${words[0]}" == "xor" ]]; then
+	    IFS=',' read op1 op2 <<< ${words[1]}
+	    local inst=(`xor $op1 $op2`)
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
+	    done	    
+	fi
+
     done
 
     
