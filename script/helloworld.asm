@@ -1,5 +1,6 @@
 	%include "lib/sys/linux_elf.nasm"
 	%include "syscalls.asm"
+	%include "lib/sys/exit.asm"
 
 START:
 	mov rdi,SYS_WRITE

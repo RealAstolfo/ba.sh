@@ -184,6 +184,38 @@ function is_immediate() {
     fi
 }
 
+function hex_to_binary() {
+    local hex_number="$1"
+    local binary_number=""
+
+    # Loop through each character in the hex number
+    for (( i=0; i<${#hex_number}; i++ )); do
+        local digit=${hex_number:i:1}
+
+        # Convert the hex digit to a 4-bit binary number
+        case $digit in
+            0) binary_number+="0000";;
+            1) binary_number+="0001";;
+            2) binary_number+="0010";;
+            3) binary_number+="0011";;
+            4) binary_number+="0100";;
+            5) binary_number+="0101";;
+            6) binary_number+="0110";;
+            7) binary_number+="0111";;
+            8) binary_number+="1000";;
+            9) binary_number+="1001";;
+            A|a) binary_number+="1010";;
+            B|b) binary_number+="1011";;
+            C|c) binary_number+="1100";;
+            D|d) binary_number+="1101";;
+            E|e) binary_number+="1110";;
+            F|f) binary_number+="1111";;
+        esac
+    done
+
+    echo $binary_number
+}
+
 
 function preprocess_assembly() {
 
@@ -462,6 +494,10 @@ function needs_rex_prefix() {
 	case $operand in
 	    AH|CH|BH|DH)
 		return 1 ;; # no
+	    R[8-15]|XMM[8-15]|YMM[8-15]|CR[8-15]|DR[8-15])
+		return 0 ;; # yes
+	    SPL|BPL|SIL|DIL)
+		return 0 ;; # yes
 	    *)
 		;;
 	esac
@@ -571,12 +607,43 @@ function dec() {
     local bytes=()
     local operand=$1
     if is_register $operand; then
+	local prefix=''
 	local size=`size_of_register $operand`
+	if needs_rex_prefix $operand; then
+	    prefix+='0100' # dec uses extension to the MODRM.rm field
+
+	    if [[ $size -eq 64 ]]; then
+		prefix+='1'
+	    else
+		prefix+='0'
+	    fi
+
+	    # TODO: support addressing modes
+	    prefix+='0'
+	    # SIB.index not needed here
+	    prefix+='0'
+	    # MODRM.rm / SIB.base field not needed here
+	    prefix+='0'
+	    bytes+=("`printf "%02X" "$((2#$prefix))"`")
+	fi
+	
 	if [[ $size -gt 8 ]]; then
 	   bytes+=("FF")
 	fi
-	   
-    fi    
+
+	# DEC requires modrm byte
+	local bits=''
+	# DEC using only register
+	bits+='11'
+	# DEC uses modrm opcode extension 001
+	bits+='001'
+	local reg_code=`encode_register $operand`
+	local reg_binary=`hex_to_binary $reg_code`
+	bits+="${reg_binary:5}" # chop off 5 bits in front, since we wont need it here
+	
+	bytes+=("`printf "%02X" "$((2#$bits))"`")
+    fi
+    echo "${bytes[@]}"
 }
 
 function mov() {
@@ -781,8 +848,11 @@ function main() {
 		# TODO: make extra parsing to check the smallest the instruction can be?
 		local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
-		echo "LEN: ${#inst[@]} INST: ${inst[@]} REL: $rel"
 		local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		;;
+	    dec)
+		local inst=(`dec ${words[1]}`)
 		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	esac
@@ -887,6 +957,14 @@ function main() {
 		bytes+=("${inst[$i]}")
 	    done
 	fi
+
+	if [[ "${words[0]}" == "dec" ]]; then
+	    local inst=(`dec ${words[1]}`)
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
+	    done	    
+	fi
+	
     done
 
     
