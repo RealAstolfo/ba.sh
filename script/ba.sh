@@ -491,10 +491,10 @@ function encode_legacy_prefixes() {
 function needs_rex_prefix() {
     local operands=("$@")
     for operand in "${operands[@]}"; do
-	case $operand in
+	case ${operand^^} in
 	    AH|CH|BH|DH)
 		return 1 ;; # no
-	    R[8-15]|XMM[8-15]|YMM[8-15]|CR[8-15]|DR[8-15])
+	    R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM[0-5]|CR[8-9]|CR[0-5]|DR[8-9]|DR[0-5])
 		return 0 ;; # yes
 	    SPL|BPL|SIL|DIL)
 		return 0 ;; # yes
@@ -569,6 +569,19 @@ function jmp() {
     echo "${bytes[@]}"
 }
 
+function jnz() {
+    local op1=$(( $1 ))
+    bytes=()
+    if [[ $op1 -ge -128 && $op1 -le 127 ]]; then
+	# JNZ rel8
+	bytes+=("75")
+	# for some reason, despite specifying %02, it does FF's all the way to 8bytes
+	local format=`printf "%02X" "$(( op1 & 0xFF ))"` 
+	bytes+=("$format")
+    fi
+    echo "${bytes[@]}"
+}
+
 function call() {
     local op1=$(( $1 ))
     local rel
@@ -618,12 +631,17 @@ function dec() {
 		prefix+='0'
 	    fi
 
-	    # TODO: support addressing modes
 	    prefix+='0'
 	    # SIB.index not needed here
 	    prefix+='0'
-	    # MODRM.rm / SIB.base field not needed here
-	    prefix+='0'
+	    case ${operand^^} in
+		R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM[0-5]|CR[8-9]|CR[0-5]|DR[8-9]|DR[0-5])
+		    prefix+='1' ;;
+		SPL|BPL|SIL|DIL)
+		    prefix+='1' ;;
+		*)
+		    prefix+='0' ;;
+	    esac
 	    bytes+=("`printf "%02X" "$((2#$prefix))"`")
 	fi
 	
@@ -645,6 +663,7 @@ function dec() {
     fi
     echo "${bytes[@]}"
 }
+
 
 function xor() {
     local operands=("$@")
@@ -703,11 +722,45 @@ function mov() {
     local opcode
     local bytes=()
 
+    # attempt to resolve potential mathematical expression
+    local result=$(echo "$(( ${operands[1]} ))" 2>/dev/null)
+    if [ $? -eq 0 ]; then
+	operands[1]=$result
+    fi
+    
     # if first operand is a register, and second operator is an immediate
-    if is_register ${operands[0]^^} && [[ "${operands[1]}" =~ ^[0-9]+$ ]]; then
-	if needs_rex_prefix ${operands[0]^^}; then
-	    local prefix=`encode_rex_prefix ${operands[0]^^}`
-	    bytes+=("$prefix")
+    if is_register ${operands[0]} && [[ "${operands[1]}" =~ ^(0x|0X)?[0-9a-fA-F]+$ ]]; then
+	local reg_size=`size_of_register ${operands[0]^^}`
+	if needs_rex_prefix ${operands[0]}; then
+	    prefix+='0100' # dec uses extension to the MODRM.rm field
+
+	    if [[ $reg_size -eq 64 ]]; then
+		prefix+='1'
+	    else
+		prefix+='0'
+	    fi
+
+	    prefix+='0'
+	    # SIB.index not needed here
+	    prefix+='0'
+	    local extended=false
+	    case ${operands[0]^^} in
+		R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM[0-5]|CR[8-9]|CR[0-5]|DR[8-9]|DR[0-5])
+		    extended=true ;;
+		SPL|BPL|SIL|DIL)
+		    extended=true ;;
+		*)
+		    extended=false ;;
+	    esac
+
+	    if [[ $extended == true ]]; then
+		prefix+='1'
+	    else
+		prefix+='0'
+	    fi
+	    
+	    
+	    bytes+=("`printf "%02X" "$((2#$prefix))"`")
 	fi
 	
 	local regcode=`encode_register ${operands[0]^^}` # ^^ to make it all capital
@@ -759,7 +812,6 @@ function mov() {
 #	exit 1
 #    fi
 }
-
 
 function encode_opcode() {
     local instruction=$1
@@ -888,12 +940,14 @@ function main() {
 	    syscall)
 		local inst=(`syscall`)
 		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;	
+		;;
 	    jmp)
 		# TODO: make extra parsing to check the smallest the instruction can be?
 		local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
-		local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		;;
+	    jnz)
+		local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 		byte_count=$(( $byte_count + ${#inst[@]} ))
 		;;
 	    call)
@@ -920,7 +974,7 @@ function main() {
 	fi
 
     done
-
+    
     remove_empty_lines
     
     # SECOND PASS, RESOLVE LABEL ADDRESSES AND REMOVE THE LINES
@@ -998,6 +1052,18 @@ function main() {
 	    local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
 	    local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+
+	    for ((i = 0; i < ${#inst[@]}; i++)); do
+		bytes+=("${inst[$i]}")
+	    done
+	fi
+
+	if [[ "${words[0]}" == "jnz" ]]; then
+	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
+ 	    # TODO: make extra parsing to check the smallest the instruction can be?
+	    local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local inst=(`jnz $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
 
 	    for ((i = 0; i < ${#inst[@]}; i++)); do
 		bytes+=("${inst[$i]}")

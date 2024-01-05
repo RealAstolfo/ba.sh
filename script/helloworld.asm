@@ -16,6 +16,7 @@ START:
 	call exit
 TEXT:
 	db "hello world!"
+	db 0x0A 		; newline char
 ADDRESS_AFTER_TEXT:
 
 END:	
