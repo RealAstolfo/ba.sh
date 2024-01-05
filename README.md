@@ -1,3 +1,4 @@
+```
 TLDR:
 an assembler targeting NASM syntax
 
@@ -20,3 +21,4 @@ db (has string parsing)
 dw
 dd
 dq
+```
