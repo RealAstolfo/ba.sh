@@ -494,6 +494,8 @@ function needs_rex_prefix() {
 	case ${operand^^} in
 	    AH|CH|BH|DH)
 		return 1 ;; # no
+	esac
+	case ${operand^^} in
 	    R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM[0-5]|CR[8-9]|CR[0-5]|DR[8-9]|DR[0-5])
 		return 0 ;; # yes
 	    SPL|BPL|SIL|DIL)
@@ -505,6 +507,8 @@ function needs_rex_prefix() {
 	if [ $size -eq 64 ]; then
 	    return 0 # yes
 	fi
+
+	# TODO: Add checks for instructions that default to 64bit operand size
     done
     return 1 # no
 }
@@ -565,7 +569,11 @@ function jmp() {
 	# for some reason, despite specifying %02, it does FF's all the way to 8bytes
 	local format=`printf "%02X" "$(( op1 & 0xFF ))"` 
 	bytes+=("$format")
+    else
+	echo "ERROR: UNKNOWN INSTRUCTION: JMP $op1" >&2
+	exit 1
     fi
+    
     echo "${bytes[@]}"
 }
 
@@ -578,6 +586,9 @@ function jnz() {
 	# for some reason, despite specifying %02, it does FF's all the way to 8bytes
 	local format=`printf "%02X" "$(( op1 & 0xFF ))"` 
 	bytes+=("$format")
+    else
+	echo "ERROR: UNKNOWN INSTRUCTION: JNZ $op1" >&2
+	exit 1
     fi
     echo "${bytes[@]}"
 }
@@ -660,7 +671,11 @@ function dec() {
 	bits+="${reg_binary:5}" # chop off 5 bits in front, since we wont need it here
 	
 	bytes+=("`printf "%02X" "$((2#$bits))"`")
+    else
+	echo "ERROR: UNKNOWN INSTRUCTION DEC $operand" >&2
+	exit 1
     fi
+
     echo "${bytes[@]}"
 }
 
@@ -953,9 +968,19 @@ function get_tokens() {
                     token+="$char"
                 fi
 		;;
+	   # '-'|'+'|'*'|'/')
+	   #     # Ensures label math is tokenized
+	   #     if $is_string; then
+	   # 	   token+="$char"
+	   #     else
+	   # 	   [[ -n $token ]] && tokens+=$("$token")
+	   # 	   tokens+=("$char")
+	   # 	   token=''
+	   #     fi
+	   #     ;;
 	   *)
-		token+="$char"
-		;;
+	       token+="$char"
+	       ;;
 	esac
     done
     # grab the last one if it exists
@@ -969,16 +994,23 @@ function main() {
     local org_address
     local byte_count=0
     local -A labels
-    
-    # FIRST PASS, JUST RECORD THE BYTE LENGTHS    
+
     for index in "${!line_array[@]}"; do
-	local line="${line_array[$index]}"
-	IFS=' ' read -ra words <<< "$line"
-	case "${words[0]}" in
+	local tokens=(`get_tokens ${line_array[index]}`)
+	if is_label "${tokens[0]}"; then
+	    echo "LABEL: ${tokens[0]%?}"
+	    labels[${tokens[0]%?}]=0
+	    continue
+	fi
+    done
+	
+    for index in "${!line_array[@]}"; do
+	local tokens=(`get_tokens ${line_array[index]}`)
+	case "${tokens[0]}" in
 	    BITS)
 		continue ;;
 	    org)
-		org_address="${words[1]}" ;;
+		org_address="${tokens[1]}" ;;
 	    db)
 		byte_count=$(( $byte_count + 0x1 )) ;;
 	    dw)
@@ -987,48 +1019,114 @@ function main() {
 		byte_count=$(( $byte_count + 0x4 )) ;;
 	    dq)
 		byte_count=$(( $byte_count + 0x8 )) ;;
-	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
-		IFS=',' read op1 op2 <<< ${words[1]}
-		local inst=(`mov $op1 $op2`)
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    syscall)
-		local inst=(`syscall`)
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    jmp)
-		# TODO: make extra parsing to check the smallest the instruction can be?
-		local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    jnz)
-		local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    call)
-		# TODO: make extra parsing to check the smallest the instruction can be?
-		local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
-		local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    dec)
-		local inst=(`dec ${words[1]}`)
-		byte_count=$(( $byte_count + ${#inst[@]} ))
-		;;
-	    xor)
-		IFS=',' read op1 op2 <<< ${words[1]}
-		local inst=(`xor $op1 $op2`)
-		byte_count=$(( $byte_count + ${#inst[@]} ))
+	    *)
+		if is_label "${tokens[0]}"; then
+		    labels[${tokens[0]%?}]=$(( $org_address + $byte_count ))
+		    continue
+		fi
+
+		# In some operands are labels, just replace it for the sake of getting the instruction size.
+		for ((i = 1; i < ${#tokens[@]}; i++)); do
+		    for label in "${!labels[@]}"; do
+			local label_address="${labels[$label]}"
+			# Temporarily process tokens as 0x0, this way we can get the byte length of the instructions
+			tokens[i]=${tokens[i]//$label/0x0}
+		    done
+    
+		    
+		    # if [[ -v labels["${tokens[i]}"] ]]; then
+		    # 	tokens[i]=${labels["${tokens[i]}"]}
+		    # fi
+		done
+
+		# resolve label math
+		# for ((i = 1; i < ${#tokens[@]}; i++)); do
+		#     local result
+		#     case ${tokens[i]} in
+		# 	'+'|'-'|'*'|'/')
+		# 	    result=$(( ${tokens[i-1]} ${tokens[i]} ${tokens[i+1]} ))
+		# 	    ;;
+		#     esac
+		#     if [[ -n $result ]]; then
+		# 	tokens[i-1]=$result
+		# 	tokens=("${tokens[@]:0:i}" "${tokens[@]:i+2}")
+		# 	((i--))
+		#     fi
+		# done
+		
+
+		echo "Processing ${tokens[@]}..." >&2
+		if [[ $(type -t "${tokens[0]}") == "function" ]]; then
+		    bytes=(`${tokens[0]} ${tokens[@]:1}`)
+		    byte_count=$(( $byte_count + ${#bytes[@]} ))
+		    echo "INSTRUCTION: ${tokens[0]} BYTES: ${bytes[@]}" >&2
+		else
+		    echo "INSTRUCTION ${tokens[0]} ${tokens[@]:1} not supported!" >&2
+		fi
 		;;
 	esac
-	
-	if is_label ${words[0]}; then
-	    labels[${words[0]%?}]=$(( $org_address + $byte_count ))
-	    line_array[$index]= # remove those lines
-	fi
-
     done
+    
+    
+    # FIRST PASS, JUST RECORD THE BYTE LENGTHS    
+    # for index in "${!line_array[@]}"; do
+    # 	local line="${line_array[$index]}"
+    # 	IFS=' ' read -ra words <<< "$line"
+    # 	case "${words[0]}" in
+    # 	    BITS)
+    # 		continue ;;
+    # 	    org)
+    # 		org_address="${words[1]}" ;;
+    # 	    db)
+    # 		byte_count=$(( $byte_count + 0x1 )) ;;
+    # 	    dw)
+    # 		byte_count=$(( $byte_count + 0x2 )) ;;
+    # 	    dd)
+    # 		byte_count=$(( $byte_count + 0x4 )) ;;
+    # 	    dq)
+    # 		byte_count=$(( $byte_count + 0x8 )) ;;
+    # 	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
+    # 		IFS=',' read op1 op2 <<< ${words[1]}
+    # 		local inst=(`mov $op1 $op2`)
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    syscall)
+    # 		local inst=(`syscall`)
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    jmp)
+    # 		# TODO: make extra parsing to check the smallest the instruction can be?
+    # 		local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    jnz)
+    # 		local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    call)
+    # 		# TODO: make extra parsing to check the smallest the instruction can be?
+    # 		local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+    # 		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
+    # 		local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    dec)
+    # 		local inst=(`dec ${words[1]}`)
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	    xor)
+    # 		IFS=',' read op1 op2 <<< ${words[1]}
+    # 		local inst=(`xor $op1 $op2`)
+    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
+    # 		;;
+    # 	esac
+	
+    # 	if is_label ${words[0]}; then
+    # 	    labels[${words[0]%?}]=$(( $org_address + $byte_count ))
+    # 	    line_array[$index]= # remove those lines
+    # 	fi
+
+    # done
     
     remove_empty_lines
     
