@@ -908,6 +908,61 @@ function parse_data() {
     echo ${hex_values[@]}
 }
 
+function get_tokens() {
+    local line="$@"
+    local tokens=()
+
+    local escaped=false
+    local is_string=false
+    
+    # can be set to " ' or even `
+    local current_string_marker=''
+
+    
+    # get tokens
+    local token=''
+    for ((i = 0; i < ${#line}; i++)); do
+	local char="${line:i:1}"
+
+	if $escaped; then
+	   token+="$char"
+	   escaped=false
+	   continue
+	fi
+	
+	case $char in
+	   ' '|',')
+		if $is_string; then
+		   token+="$char"
+		else
+		   [[ -n $token ]] && tokens+=("$token")
+		   token=''
+		fi
+		;;
+	   \\)
+		escaped=true
+		;;
+	   \'|\")
+                if $is_string && [[ $current_string_marker == "$char" ]]; then
+                    is_string=false
+                    current_string_marker=''
+                elif ! $is_string; then
+                    is_string=true
+                    current_string_marker="$char"
+                else
+                    token+="$char"
+                fi
+		;;
+	   *)
+		token+="$char"
+		;;
+	esac
+    done
+    # grab the last one if it exists
+    [[ -n $token ]] && tokens+=("$token")
+    echo "${tokens[@]}"
+}
+
 function main() {
     preprocess_assembly
 
