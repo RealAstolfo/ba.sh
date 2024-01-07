@@ -995,15 +995,17 @@ function main() {
     local byte_count=0
     local -A labels
 
+    # Temporary 0x0 addresses for all labels as we figure out the binary size
     for index in "${!line_array[@]}"; do
 	local tokens=(`get_tokens ${line_array[index]}`)
 	if is_label "${tokens[0]}"; then
-	    echo "LABEL: ${tokens[0]%?}"
 	    labels[${tokens[0]%?}]=0
 	    continue
 	fi
     done
 	
+    # Use temporary 0x0 label addresses to encode instructions. this way we get a better idea as to what the label addresses
+    # should be. this will simulataniously replace the label address value
     for index in "${!line_array[@]}"; do
 	local tokens=(`get_tokens ${line_array[index]}`)
 	case "${tokens[0]}" in
@@ -1032,11 +1034,6 @@ function main() {
 			# Temporarily process tokens as 0x0, this way we can get the byte length of the instructions
 			tokens[i]=${tokens[i]//$label/0x0}
 		    done
-    
-		    
-		    # if [[ -v labels["${tokens[i]}"] ]]; then
-		    # 	tokens[i]=${labels["${tokens[i]}"]}
-		    # fi
 		done
 
 		# resolve label math
@@ -1065,70 +1062,7 @@ function main() {
 		fi
 		;;
 	esac
-    done
-    
-    
-    # FIRST PASS, JUST RECORD THE BYTE LENGTHS    
-    # for index in "${!line_array[@]}"; do
-    # 	local line="${line_array[$index]}"
-    # 	IFS=' ' read -ra words <<< "$line"
-    # 	case "${words[0]}" in
-    # 	    BITS)
-    # 		continue ;;
-    # 	    org)
-    # 		org_address="${words[1]}" ;;
-    # 	    db)
-    # 		byte_count=$(( $byte_count + 0x1 )) ;;
-    # 	    dw)
-    # 		byte_count=$(( $byte_count + 0x2 )) ;;
-    # 	    dd)
-    # 		byte_count=$(( $byte_count + 0x4 )) ;;
-    # 	    dq)
-    # 		byte_count=$(( $byte_count + 0x8 )) ;;
-    # 	    mov) # TODO: change this section of the case to be a loop over implemented instructions (list of inst names)
-    # 		IFS=',' read op1 op2 <<< ${words[1]}
-    # 		local inst=(`mov $op1 $op2`)
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    syscall)
-    # 		local inst=(`syscall`)
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    jmp)
-    # 		# TODO: make extra parsing to check the smallest the instruction can be?
-    # 		local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    jnz)
-    # 		local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    call)
-    # 		# TODO: make extra parsing to check the smallest the instruction can be?
-    # 		local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-    # 		local rel=$(( ${words[1]} - (org_address + byte_count + ${#inst[@]}) ))
-    # 		local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    dec)
-    # 		local inst=(`dec ${words[1]}`)
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	    xor)
-    # 		IFS=',' read op1 op2 <<< ${words[1]}
-    # 		local inst=(`xor $op1 $op2`)
-    # 		byte_count=$(( $byte_count + ${#inst[@]} ))
-    # 		;;
-    # 	esac
-	
-    # 	if is_label ${words[0]}; then
-    # 	    labels[${words[0]%?}]=$(( $org_address + $byte_count ))
-    # 	    line_array[$index]= # remove those lines
-    # 	fi
-
-    # done
-    
-    remove_empty_lines
+    done    
     
     # SECOND PASS, RESOLVE LABEL ADDRESSES AND REMOVE THE LINES
     for label in "${!labels[@]}"; do
@@ -1167,6 +1101,7 @@ function main() {
     remove_empty_lines
     
     local bytes=()
+    
     # THIRD PASS, CONVERT TO BYTES!!!
     for line in "${line_array[@]}"; do
 	IFS=' ' read -ra words <<< "$line" # extract first word

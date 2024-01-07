@@ -1,0 +1,13 @@
+TODO:
+1) make a first pass, this first pass will assume largest immediate values where labels are used for the registers given.
+   this way we can actually calculate the size of an instruction without needing to know the label addresses when used in place
+   of an immediate.
+
+2) now that we know the size of each instruction, the label values can be created to match
+
+3) now that we have the labels to match, we can create a second pass that will see how small the immediates where labels are used
+   can be and with what registers we use. this will give us a new instruction size potentially (and most likely).
+
+4) now that we know the actual size of the instruction, we need to calculate the new label address
+
+5) now that every label should have the correct address, encode all of the instructions.
