@@ -7,6 +7,9 @@ TODO:
 
 3) now that we have the labels to match, we can create a second pass that will see how small the immediates where labels are used
    can be and with what registers we use. this will give us a new instruction size potentially (and most likely).
+   NOTE: this is also where instruction size optimization occurrs. and where NASM likely turns that mov rdi, 69 you had into
+   mov edi, 69 you saw in ghidra
+
 
 4) now that we know the actual size of the instruction, we need to calculate the new label address
 
