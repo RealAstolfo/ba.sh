@@ -721,7 +721,7 @@ function mov() {
 		R[8-9]|R1[0-5]|XMM[8-9]|XMM1[0-5]|YMM[8-9]|YMM[0-5]|CR[8-9]|CR[0-5]|DR[8-9]|DR[0-5])
 		    extended=true ;;
 		SPL|BPL|SIL|DIL)
-		    extended=true ;;
+		    extended=false ;;
 		*)
 		    extended=false ;;
 	    esac
@@ -768,7 +768,6 @@ function mov() {
 	done
 
     fi
-
     echo "${bytes[@]}"
 #    if [[ $1 =~ ^r[a-z0-9]+,[0-9]+$ ]]; then
 	# detected mov register,immediate
