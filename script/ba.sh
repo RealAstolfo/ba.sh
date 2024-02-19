@@ -164,8 +164,8 @@ function is_register() {
 }
 
 function is_memory() {
-    local operand="$1"
-    if [[ $operand =~ ^\[[^\]]+\]$ ]]; then
+    local operand="$@"
+    if [[ $operand =~ \[.*\] ]]; then
         return 0
     else
         return 1
@@ -220,6 +220,20 @@ function strip_comments() {
 	par[index]="${par[index]//;*/}"
 	strip_space par[index]
     done
+}
+
+function convert_octal_to_hex() {
+    local octal_number="${1%o}"
+    printf "0x%X\n" "$((8#$octal_number))"
+}
+
+function is_octal() {
+    local input="$1"
+    if [[ $input =~ ^[0-7]+o$ ]]; then
+	return 0
+    else
+	return 1
+    fi
 }
 
 function tokenize() {
@@ -704,10 +718,15 @@ function mov() {
     local opcode
     local bytes=()
 
-    # attempt to resolve potential mathematical expression
-    local result=$(echo "$(( ${operands[@]:1} ))" 2>/dev/null)
-    if [ $? -eq 0 ]; then
-	operands[1]=$result
+    if is_memory "${operands[@]:1}"; then
+	echo "MEMORY OPERAND, CURRENTLY NOT SUPPORTED" >&2
+	exit 1
+    else
+	# attempt to resolve potential mathematical expression
+	local result=$(echo "$(( ${operands[@]:1} ))" 2>/dev/null)
+	if [ $? -eq 0 ]; then
+	    operands[1]=$result
+	fi
     fi
     
     # if first operand is a register, and second operator is an immediate
@@ -1009,6 +1028,17 @@ function first_pass() {
     dbdddwdq line_array
     remove_empty_lines
 
+    # replace all octals with hexadecimal representation, simplifies later logic
+    for ((i = 0; i < $len; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	for token_index in "${!tokens[@]}"; do
+	    if is_octal ${tokens[token_index]}; then
+		tokens[$token_index]=`convert_octal_to_hex ${tokens[token_index]}`
+	    fi
+	    line_array[$i]="${tokens[@]}"
+	done
+    done
+
     tokenize line_array
 }
 
@@ -1152,7 +1182,7 @@ function main() {
 	local inst=()
 	if [[ "${tokens[0]}" == "mov" ]]; then
 	    # THIS IS EXTREMELY SENSITIVE, it will only work right if the first parameter is a register
-	    inst=(`mov ${tokens[1]} $(( ${tokens[@]:2} ))`)
+	    inst=(`mov ${tokens[1]} ${tokens[@]:2}`)
 	elif [[ "${tokens[0]}" == "syscall" ]]; then
 	    inst=(`syscall`)
 	elif [[ "${tokens[0]}" == "jmp" ]]; then
