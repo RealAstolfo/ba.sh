@@ -696,7 +696,7 @@ function mov() {
     local bytes=()
 
     # attempt to resolve potential mathematical expression
-    local result=$(echo "$(( ${operands[1]} ))" 2>/dev/null)
+    local result=$(echo "$(( ${operands[@]:1} ))" 2>/dev/null)
     if [ $? -eq 0 ]; then
 	operands[1]=$result
     fi
@@ -997,7 +997,8 @@ function first_pass() {
 function main() {
     first_pass
     # second_pass
-	    
+
+
     local org_address
     local byte_count=0
     local -A labels
@@ -1012,6 +1013,7 @@ function main() {
 	fi
     done
 
+    
     # Use temporary 0x0 label addresses to encode instructions. this way we get a better idea as to what the label addresses
     # should be. this will simulataniously replace the label address value
     for ((i = 0; i < ${#line_array[@]}; i++)); do
@@ -1036,149 +1038,161 @@ function main() {
 		fi
 
 		# In some operands are labels, just replace it for the sake of getting the instruction size.
-		for ((i = 1; i < ${#tokens[@]}; i++)); do
+		for ((j = 1; j < ${#tokens[@]}; j++)); do
 		    for label in "${!labels[@]}"; do
 			local label_address="${labels[$label]}"
 			# Temporarily process tokens as 0x0, this way we can get the byte length of the instructions
-			tokens[i]=${tokens[i]//$label/0x0}
+			tokens[j]=${tokens[j]//$label/0x0}
 		    done
 		done
 
 		# resolve label math
-		# for ((i = 1; i < ${#tokens[@]}; i++)); do
-		#     local result
-		#     case ${tokens[i]} in
-		# 	'+'|'-'|'*'|'/')
-		# 	    result=$(( ${tokens[i-1]} ${tokens[i]} ${tokens[i+1]} ))
-		# 	    ;;
-		#     esac
-		#     if [[ -n $result ]]; then
-		# 	tokens[i-1]=$result
-		# 	tokens=("${tokens[@]:0:i}" "${tokens[@]:i+2}")
-		# 	((i--))
-		#     fi
-		# done
-		
+		for ((j = 1; j < ${#tokens[@]}; j++)); do
+		    local result
+		    case ${tokens[j]} in
+			'+'|'-'|'*'|'/')
+			    if [[ $j -gt 0 && $j -lt $((${#tokens[@]} - 1)) ]]; then
+				result=$(( ${tokens[j-1]} ${tokens[j]} ${tokens[j+1]} ))
+			    fi
+			    ;;
+		    esac
+		    if [[ -v result ]]; then
+			tokens[j-1]=$result
+			tokens=("${tokens[@]:0:j}" "${tokens[@]:j+2}")
+			((j--))
+		    fi
+		done
 
-		echo "Processing ${tokens[@]}..." >&2
+		# echo "Processing ${tokens[@]}..." >&2
 		if [[ $(type -t "${tokens[0]}") == "function" ]]; then
 		    bytes=(`${tokens[0]} ${tokens[@]:1}`)
 		    byte_count=$(( $byte_count + ${#bytes[@]} ))
-		    echo "INSTRUCTION: ${tokens[0]} BYTES: ${bytes[@]}" >&2
-		else
-		    echo "INSTRUCTION ${tokens[0]} ${tokens[@]:1} not supported!" >&2
+		#     echo "INSTRUCTION: ${tokens[0]} BYTES: ${bytes[@]}" >&2
+		# else
+		#     echo "INSTRUCTION ${tokens[0]} ${tokens[@]:1} not supported!" >&2
 		fi
 		;;
 	esac
-    done    
-
-    for ((i = 0; i < ${#line_array[@]}; i++)); do
-	local tokens=(`get_tokens ${line_array[i]}`)
-	case "${tokens[0]}" in
-	    db)
-		result=`printf "0x%02X" "$((${tokens[1]}))"` ;;
-	    dw)
-		result=`printf "0x%04X" "$((${tokens[1]}))"` ;;
-	    dd)
-		result=`printf "0x%08X" "$((${tokens[1]}))"` ;;
-	    dq)
-		result=`printf "0x%016X" "$((${tokens[1]}))"` ;;
-	esac
-
-	if [[ -v result ]]; then
-	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
-	    unset result
-	fi
-	
-    done
-    remove_empty_lines
-
+    done	
+    
     local bytes=()
 
     # THIRD PASS, CONVERT TO BYTES!!!
-    for line in "${line_array[@]}"; do
-	IFS=' ' read -ra words <<< "$line" # extract first word
-	if [[ "${words[0]}" == "BITS" ]]; then
+    for ((i = 0; i < ${#line_array[@]}; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	if [[ "${tokens[0]}" == "BITS" ]]; then
 	    continue # we do not currently support anything other than x64, so this is useless
 	fi
 
+	for token_index in "${!tokens[@]}"; do
+	    if [ -v labels["${tokens[token_index]}"] ]; then
+		tokens[$token_index]=${labels[${tokens[token_index]}]}
+	    fi
+	done
+
+
+	case "${tokens[0]}" in
+	    db)	
+		local result=`printf "0x%02X" "$((${tokens[@]:1}))"`
+		if [[ -v result ]]; then
+		    tokens=("${tokens[0]}" "$result")
+		fi
+		;;
+	    dw)
+		local result=`printf "0x%04X" "$((${tokens[@]:1}))"`
+		if [[ -v result ]]; then
+		    tokens=("${tokens[0]}" "$result")
+		fi
+		;;
+	    dd)
+		local result=`printf "0x%08X" "$((${tokens[@]:1}))"`
+	       	if [[ -v result ]]; then
+		    tokens=("${tokens[0]}" "$result")
+		fi
+		;;
+	    dq)
+		local result=`printf "0x%016X" "$((${tokens[@]:1}))"`
+		if [[ -v result ]]; then
+		    tokens=("${tokens[0]}" "$result")
+		fi
+		;;
+	esac
+
 	
-	case "${words[0]}" in
-	    db|dw|dd|dq)
-		# bash apparently assumes return is a string with spaces... hours wasted
-		local data=(`parse_data "${words[0]}" "${words[1]}"`) 
+	case "${tokens[0]}" in
+            db|dw|dd|dq)
+		local data=(`parse_data "${tokens[0]}" "${tokens[@]:1}"`)
 		for byte in "${data[@]}"; do
 		    bytes+=("$byte")
 		done
+		;;
 	esac
 	
-	if [[ "${words[0]}" == "mov" ]]; then
-	    IFS=',' read op1 op2 <<< ${words[1]}
-	    local inst=(`mov $op1 $op2`)
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[i]}")
+	if [[ "${tokens[0]}" == "mov" ]]; then
+	    # THIS IS EXTREMELY SENSITIVE, it will only work right if the first parameter is a register
+	    local inst=(`mov ${tokens[1]} $(( ${tokens[@]:2} ))`)
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[j]}")
 	    done
 	fi
 
-	if [[ "${words[0]}" == "syscall" ]]; then
+	if [[ "${tokens[0]}" == "syscall" ]]; then
 	    local inst=(`syscall`)
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
 	    done
 	fi
 
-	if [[ "${words[0]}" == "jmp" ]]; then
+	if [[ "${tokens[0]}" == "jmp" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
 	    local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
 	    local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
 
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
 	    done
 	fi
 
-	if [[ "${words[0]}" == "jnz" ]]; then
+	if [[ "${tokens[0]}" == "jnz" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
 	    local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
 	    local inst=(`jnz $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
 
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
 	    done
 	fi
 
-    	if [[ "${words[0]}" == "call" ]]; then
+    	if [[ "${tokens[0]}" == "call" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
 	    local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    local rel=$(( ${words[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
+	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
 	    local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
 	    done
 	fi
 
-	if [[ "${words[0]}" == "dec" ]]; then
-	    local inst=(`dec ${words[1]}`)
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
-	    done	    
+	if [[ "${tokens[0]}" == "dec" ]]; then
+	    local inst=(`dec ${tokens[1]}`)
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
+	    done
 	fi
 	
-	if [[ "${words[0]}" == "xor" ]]; then
-	    IFS=',' read op1 op2 <<< ${words[1]}
-	    local inst=(`xor $op1 $op2`)
-	    for ((i = 0; i < ${#inst[@]}; i++)); do
-		bytes+=("${inst[$i]}")
+	if [[ "${tokens[0]}" == "xor" ]]; then
+	    local inst=(`xor ${tokens[@]:1}`)
+	    for ((j = 0; j < ${#inst[@]}; j++)); do
+		bytes+=("${inst[$j]}")
 	    done	    
 	fi
 
     done
-
     
     byte_string=""
     for byte in "${bytes[@]}"; do
