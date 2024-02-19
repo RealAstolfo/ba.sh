@@ -222,6 +222,15 @@ function strip_comments() {
     done
 }
 
+function tokenize() {
+    local -n lines="$1"
+    local index=0
+    for index in "${!lines[@]}"; do
+	local tokens=(`get_tokens ${lines[index]}`)
+	lines[index]="${tokens[@]}"
+    done
+}
+
 function include() {
     local -n lines=$1
     local file=$2
@@ -936,6 +945,17 @@ function get_tokens() {
 		   token=''
 	       fi
 	       ;;
+	   '['|']')
+	       # Tokenize addressing modes
+	       if $is_string; then
+		   token+="$char"
+	       else
+		   [[ -n $token ]] && tokens+=("$token")
+		   # Ensure the math operator is made itself a token.
+		   tokens+=("$char")
+		   token=''
+	       fi
+	       ;;
 	   *)
 	       token+="$char"
 	       ;;
@@ -988,6 +1008,8 @@ function first_pass() {
 
     dbdddwdq line_array
     remove_empty_lines
+
+    tokenize line_array
 }
 
 # function second_pass() {
