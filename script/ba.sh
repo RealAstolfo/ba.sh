@@ -1047,21 +1047,21 @@ function main() {
 		done
 
 		# resolve label math
-		for ((j = 1; j < ${#tokens[@]}; j++)); do
-		    local result
-		    case ${tokens[j]} in
-			'+'|'-'|'*'|'/')
-			    if [[ $j -gt 0 && $j -lt $((${#tokens[@]} - 1)) ]]; then
-				result=$(( ${tokens[j-1]} ${tokens[j]} ${tokens[j+1]} ))
-			    fi
-			    ;;
-		    esac
-		    if [[ -v result ]]; then
-			tokens[j-1]=$result
-			tokens=("${tokens[@]:0:j}" "${tokens[@]:j+2}")
-			((j--))
-		    fi
-		done
+		# for ((j = 1; j < ${#tokens[@]}; j++)); do
+		#     local result
+		#     case ${tokens[j]} in
+		# 	'+'|'-'|'*'|'/')
+		# 	    if [[ $j -gt 0 && $j -lt $((${#tokens[@]} - 1)) ]]; then
+		# 		result=$(( ${tokens[j-1]} ${tokens[j]} ${tokens[j+1]} ))
+		# 	    fi
+		# 	    ;;
+		#     esac
+		#     if [[ -v result ]]; then
+		# 	tokens[j-1]=$result
+		# 	tokens=("${tokens[@]:0:j}" "${tokens[@]:j+2}")
+		# 	((j--))
+		#     fi
+		# done
 
 		# echo "Processing ${tokens[@]}..." >&2
 		if [[ $(type -t "${tokens[0]}") == "function" ]]; then
@@ -1074,7 +1074,7 @@ function main() {
 		;;
 	esac
     done	
-    
+
     local bytes=()
 
     # THIRD PASS, CONVERT TO BYTES!!!
@@ -1089,7 +1089,6 @@ function main() {
 		tokens[$token_index]=${labels[${tokens[token_index]}]}
 	    fi
 	done
-
 
 	case "${tokens[0]}" in
 	    db)	
@@ -1125,73 +1124,44 @@ function main() {
 		for byte in "${data[@]}"; do
 		    bytes+=("$byte")
 		done
+		continue
 		;;
 	esac
-	
+
+	local inst=()
 	if [[ "${tokens[0]}" == "mov" ]]; then
 	    # THIS IS EXTREMELY SENSITIVE, it will only work right if the first parameter is a register
-	    local inst=(`mov ${tokens[1]} $(( ${tokens[@]:2} ))`)
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[j]}")
-	    done
-	fi
-
-	if [[ "${tokens[0]}" == "syscall" ]]; then
-	    local inst=(`syscall`)
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done
-	fi
-
-	if [[ "${tokens[0]}" == "jmp" ]]; then
+	    inst=(`mov ${tokens[1]} $(( ${tokens[@]:2} ))`)
+	elif [[ "${tokens[0]}" == "syscall" ]]; then
+	    inst=(`syscall`)
+	elif [[ "${tokens[0]}" == "jmp" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
-	    local inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    inst=(`jmp 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
-	    local inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done
-	fi
-
-	if [[ "${tokens[0]}" == "jnz" ]]; then
+	    inst=(`jmp $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	elif  [[ "${tokens[0]}" == "jnz" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
-	    local inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    inst=(`jnz 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
-	    local inst=(`jnz $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done
-	fi
-
-    	if [[ "${tokens[0]}" == "call" ]]; then
+	    inst=(`jnz $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	elif [[ "${tokens[0]}" == "call" ]]; then
 	    # HACK: TODO: Rework parser to know all the bytes needed way ahead of time
  	    # TODO: make extra parsing to check the smallest the instruction can be?
-	    local inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	    inst=(`call 0`) # TODO: Figure out how to handle literally anything bigger than 8bits
 	    local rel=$(( ${tokens[1]} - (org_address + ${#bytes[@]} + ${#inst[@]}) ))
-	    local inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done
+	    inst=(`call $rel`) # TODO: Figure out how to handle literally anything bigger than 8bits
+	elif [[ "${tokens[0]}" == "dec" ]]; then
+	    inst=(`dec ${tokens[1]}`)
+	elif [[ "${tokens[0]}" == "xor" ]]; then
+	    inst=(`xor ${tokens[@]:1}`)
 	fi
 
-	if [[ "${tokens[0]}" == "dec" ]]; then
-	    local inst=(`dec ${tokens[1]}`)
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done
-	fi
-	
-	if [[ "${tokens[0]}" == "xor" ]]; then
-	    local inst=(`xor ${tokens[@]:1}`)
-	    for ((j = 0; j < ${#inst[@]}; j++)); do
-		bytes+=("${inst[$j]}")
-	    done	    
-	fi
-
+	echo "INSTRUCTION: ${tokens[0]} BYTES: ${inst[@]}" >&2
+	for ((j = 0; j < ${#inst[@]}; j++)); do
+	    bytes+=("${inst[$j]}")
+	done	    
     done
     
     byte_string=""
