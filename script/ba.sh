@@ -19,22 +19,21 @@ function is_whitespace() {
     [[ "$line" =~ ^[[:space:]]*$ ]]
 }
 
-function skip_space() {
-    str=$1
+function strip_space() {
+    local -n str=$1
     str="${str#"${str%%[![:space:]]*}"}" # Skip whitespace
     str="${str%"${str##*[![:space:]]}"}" # Remove trailing whitespace
-    echo $str
 }
 
 function is_include() {
-    if [[ $1 == "%include"* ]]; then
+    if [[ $1 == "%include" ]]; then
 	return 0
     fi
     return 1
 }
 
 function is_db() {
-    if [[ $1 == "db"* ]]; then
+    if [[ $1 == "db" ]]; then
 	return 0
     fi
     return 1
@@ -101,7 +100,7 @@ function is_define() {
 
 declare -A asm_macro
 function is_macro() {
-    if [[ $1 == "%macro"* ]]; then
+    if [[ $1 == "%macro" ]]; then
 	return 0
     fi
     return 1
@@ -115,7 +114,7 @@ function is_endmacro() {
 }
 
 function is_ifndef() {
-    if [[ $1 == "%ifndef"* ]]; then
+    if [[ $1 == "%ifndef" ]]; then
 	return 0
     fi
     return 1
@@ -139,9 +138,7 @@ function is_times() {
 }
 
 function is_org() {
-    str=$1
-    str=`skip_space "$str"`
-    if [[ $str == "org"* ]]; then
+    if [[ $1 == "org" ]]; then
 	return 0
     fi
     return 1
@@ -216,98 +213,62 @@ function hex_to_binary() {
     echo $binary_number
 }
 
-
-function preprocess_assembly() {
-
-    # remove all comments
-    for index in "${!line_array[@]}"; do
-	line_array[$index]="${line_array[$index]//;*/}" # remove comments denoted with ';'
-	line_array[$index]=`skip_space "${line_array[$index]}"`
+function strip_comments() {
+    local -n par="$1"
+    local index=0
+    for index in "${!par[@]}"; do
+	par[index]="${par[index]//;*/}"
+	strip_space par[index]
     done
+}
 
-
-    # find all assembly %include directives
-    local check_again=true
-    while [[ $check_again == true ]]; do
-	check_again=false
-	for index in "${!line_array[@]}"; do
-	    if is_include ${line_array[$index]}; then
-		IFS=' ' read _ file <<< ${line_array[$index]}
-		local include_lines=()
-		mapfile -t include_lines < "${file//\"/}" # remove the quotes
-		# remove all comments... again.
-		for index_j in "${!include_lines[@]}"; do
-		    include_lines[$index_j]="${include_lines[$index_j]//;*/}" # remove comments denoted with ';'
-		    include_lines[$index_j]=`skip_space "${include_lines[$index_j]}"`
-		done
-		local new_lines=("${line_array[@]:0:index}" "${include_lines[@]}" "${line_array[@]:index+1}")
-		line_array=("${new_lines[@]}")
-		check_again=true
-		# because includes could contain includes, or there could be multiple includes in a file
-		# we need to reset the loop
-		break
-	    fi
-	done
-    done
-
-    remove_empty_lines
+function include() {
+    local -n lines=$1
+    local file=$2
+    local index=$3
     
-    # find all assembly %define directives
-    for index in "${!line_array[@]}"; do
-	if is_define ${line_array[$index]}; then
-	    IFS=' ' read _ defname value <<< ${line_array[index]}
-	    asm_defines[$defname]=$value
-	    unset "line_array[$index]"
-	fi
-    done
+    local include_lines=()
+    mapfile -t include_lines < "${file//\"/}"
+    strip_comments include_lines
+    lines=("${lines[@]:0:index}" "${include_lines[@]}" "${lines[@]:index+1}")
+}
 
-    # preprocess the defines found in the source.
-    local key_found=true
-    while [[ $key_found == true ]]; do
-	key_found=false  # Assume no more replacements will be made
-	
-	for key in "${!asm_defines[@]}"; do
-            for index in "${!line_array[@]}"; do
-		value="${asm_defines[$key]}"
-		# Perform substitution and check if any replacement was made
-		if [[ "${line_array[$index]}" =~ $key ]]; then
-                    line_array[$index]="${line_array[$index]//$key/$value}"
-                    key_found=true  # Set to true as a replacement was made
-		fi
-            done
-	done
-    done
+function define() {
+    local defname=$1
+    local index=$2
+    local value="${@:3}"
+    asm_defines[$defname]=$value
+    unset line_array[$index]
+}
 
-    remove_empty_lines
-    
-    # find all assembly %macro and %endmacro directives
+function macro() {
+    local -n lines=$1
     local current_macro
-    for index in "${!line_array[@]}"; do
-	if is_macro ${line_array[$index]}; then
-	    IFS=' ' read _ macname _ <<< ${line_array[$index]}
-	    current_macro=$macname
-	    unset "line_array[$index]"
-	elif is_endmacro ${line_array[$index]}; then
+    for ((i = 0; i < ${#lines[@]}; i++)); do
+	local tokens=(`get_tokens ${lines[$i]}`)
+	if is_macro ${tokens[0]}; then
+	    current_macro=${tokens[1]}
+	    unset lines[$i]
+	elif is_endmacro ${tokens[0]}; then
 	    unset current_macro
-	    unset "line_array[$index]"
-	elif [ -n "$current_macro" ]; then                                                                                            
-            asm_macros["$current_macro"]+="${line_array[$index]}"
-	    unset "line_array[$index]"
+	    unset lines[$i]
+	elif [ -n "$current_macro" ]; then
+	    asm_macros["$current_macro"]+="${lines[$i]}"
+	    unset lines[$i]
 	else
 	    continue
-	fi
+	fi	
     done
+}
 
-    # remove empty lines so that "index" becomes zero again
-    remove_empty_lines
-    
-    # find all 'times' macros and process them
+function proc_times() {
+    local -n lines=$1
     local new_lines=()
     local index_save
-    for index in "${!line_array[@]}"; do
-	if is_times ${line_array[$index]}; then
-	    IFS=' ' read _ count wideness content <<< ${line_array[$index]}
-	    unset "line_array[$index]"
+    for index in "${!lines[@]}"; do
+	if is_times ${lines[$index]}; then
+	    IFS=' ' read _ count wideness content <<< ${lines[$index]}
+	    unset "lines[$index]"
 	    index_save=$index
 	    for ((i = 0; i < count; i++)); do
 		new_lines+=("$wideness $content")
@@ -315,18 +276,19 @@ function preprocess_assembly() {
 	    break
 	fi
     done
-    line_array=("${line_array[@]:0:index_save}" "${new_lines[@]}" "${line_array[@]:index_save+1}")
-    remove_empty_lines
-    
-    # preprocess comma'd db,dw,dd,dq's
+    lines=("${lines[@]:0:index_save}" "${new_lines[@]}" "${lines[@]:index_save+1}")
+}
+
+function dbdddwdq() {
+    local -n lines=$1
     local new_lines=()
     local check_again=true
     while [[ $check_again == true ]]; do
 	check_again=false
-	for index in "${!line_array[@]}"; do
-	    if is_multi_db ${line_array[$index]}; then
+	for index in "${!lines[@]}"; do
+	    if is_multi_db ${lines[$index]}; then
 
-		local line="${line_array[$index]}"
+		local line="${lines[$index]}"
 		local entry_type="${line%% *}"
 		line=${line#* }
 		local within_quote=false
@@ -371,16 +333,12 @@ function preprocess_assembly() {
 		    resolved_lines+=("$entry_type $hex")
 		done
 		check_again=true
-		local new_lines=("${line_array[@]:0:$index}" "${resolved_lines[@]}" "${line_array[@]:$index+1}")
-		line_array=("${new_lines[@]}")
+		local new_lines=("${lines[@]:0:$index}" "${resolved_lines[@]}" "${lines[@]:$index+1}")
+		lines=("${new_lines[@]}")
 	    fi
 	done
     done
-
-    remove_empty_lines
-
 }
-
 
 ###################################################################
 # HELPER
@@ -968,16 +926,17 @@ function get_tokens() {
                     token+="$char"
                 fi
 		;;
-	   # '-'|'+'|'*'|'/')
-	   #     # Ensures label math is tokenized
-	   #     if $is_string; then
-	   # 	   token+="$char"
-	   #     else
-	   # 	   [[ -n $token ]] && tokens+=$("$token")
-	   # 	   tokens+=("$char")
-	   # 	   token=''
-	   #     fi
-	   #     ;;
+	   '-'|'+'|'*'|'/'|')'|'(')
+	       # Ensures label math is tokenized
+	       if $is_string; then
+		   token+="$char"
+	       else
+		   [[ -n $token ]] && tokens+=("$token")
+		   # Ensure the math operator is made itself a token.
+		   tokens+=("$char")
+		   token=''
+	       fi
+	       ;;
 	   *)
 	       token+="$char"
 	       ;;
@@ -988,26 +947,75 @@ function get_tokens() {
     echo "${tokens[@]}"
 }
 
-function main() {
-    preprocess_assembly
+function first_pass() {
+    strip_comments line_array
+    local len=${#line_array[@]}
 
+    for ((i = 0; i < $len; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	if is_include ${tokens[0]}; then
+	    include line_array "${tokens[1]}" $i
+	    i=0
+	    len=${#line_array[@]}
+	fi
+    done
+    remove_empty_lines
+
+    for ((i = 0; i < $len; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	if is_define ${tokens[0]}; then
+	    define ${tokens[1]} $i "${tokens[@]:2}"
+	fi
+    done
+    remove_empty_lines
+
+    # replace all defines now
+    for ((i = 0; i < $len; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	for token_index in "${!tokens[@]}"; do
+	    if [ -v asm_defines["${tokens[token_index]}"] ]; then
+		tokens[$token_index]=${asm_defines["${tokens[token_index]}"]}
+		line_array[$i]="${tokens[@]}"
+		i=0
+	    fi
+	done
+    done
+    
+    macro line_array
+    remove_empty_lines
+
+    proc_times line_array
+    remove_empty_lines
+
+    dbdddwdq line_array
+    remove_empty_lines
+}
+
+# function second_pass() {
+# }
+
+function main() {
+    first_pass
+    # second_pass
+	    
     local org_address
     local byte_count=0
     local -A labels
 
+
     # Temporary 0x0 addresses for all labels as we figure out the binary size
-    for index in "${!line_array[@]}"; do
-	local tokens=(`get_tokens ${line_array[index]}`)
-	if is_label "${tokens[0]}"; then
+    for ((i = 0; i < ${#line_array[@]}; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	if is_label ${tokens[0]}; then
 	    labels[${tokens[0]%?}]=0
 	    continue
 	fi
     done
-	
+
     # Use temporary 0x0 label addresses to encode instructions. this way we get a better idea as to what the label addresses
     # should be. this will simulataniously replace the label address value
-    for index in "${!line_array[@]}"; do
-	local tokens=(`get_tokens ${line_array[index]}`)
+    for ((i = 0; i < ${#line_array[@]}; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
 	case "${tokens[0]}" in
 	    BITS)
 		continue ;;
@@ -1063,45 +1071,30 @@ function main() {
 		;;
 	esac
     done    
-    
-    # SECOND PASS, RESOLVE LABEL ADDRESSES AND REMOVE THE LINES
-    for label in "${!labels[@]}"; do
-	local label_address="${labels[$label]}"
-	label_address=`printf "0x%X" "$label_address"`
-	for index in "${!line_array[@]}"; do
-	    local line="${line_array[$index]}"
-	    IFS=' ' read -ra words <<< "$line" # extract first word
-	    # replace any text matching $label with $label_address
-	    line_array[$index]=${line_array[$index]//$label/$label_address}
-	done
-    done
 
-    for index in "${!line_array[@]}"; do
-	local line="${line_array[$index]}"
-	IFS=' ' read -ra words <<< "$line" # extract first word
-	local result
-	case "${words[0]}" in
+    for ((i = 0; i < ${#line_array[@]}; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	case "${tokens[0]}" in
 	    db)
-		result=`printf "0x%02X" "$((${words[1]}))"` ;;
+		result=`printf "0x%02X" "$((${tokens[1]}))"` ;;
 	    dw)
-		result=`printf "0x%04X" "$((${words[1]}))"` ;;
+		result=`printf "0x%04X" "$((${tokens[1]}))"` ;;
 	    dd)
-		result=`printf "0x%08X" "$((${words[1]}))"` ;;
+		result=`printf "0x%08X" "$((${tokens[1]}))"` ;;
 	    dq)
-		result=`printf "0x%016X" "$((${words[1]}))"` ;;
+		result=`printf "0x%016X" "$((${tokens[1]}))"` ;;
 	esac
 
 	if [[ -v result ]]; then
 	    line_array[$index]=${line_array[$index]//${words[1]}/$result}
 	    unset result
 	fi
+	
     done
-
-    
     remove_empty_lines
-    
+
     local bytes=()
-    
+
     # THIRD PASS, CONVERT TO BYTES!!!
     for line in "${line_array[@]}"; do
 	IFS=' ' read -ra words <<< "$line" # extract first word
@@ -1204,9 +1197,14 @@ function main() {
     chmod +x a.out
 }
 
-
+#first_pass
 main
-
 for line in "${line_array[@]}"; do
-    echo "$line"
+   echo "$line"
 done
+
+#main
+#for line in "${line_array[@]}"; do
+#    echo "$line"
+#done
+
