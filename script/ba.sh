@@ -664,15 +664,20 @@ function dec() {
 function xor() {
     local operands=("$@")
     local bytes=()
+
+    local op0_is_register=$(is_register ${operands[0]})
+    local op1_is_register=$(is_register ${operands[1]})
+    local size_op0=`size_of_register ${operands[0]}`
+    local size_op1=`size_of_register ${operands[1]}`
+
+    if [[ $size_op0 != $size_op1 ]]; then
+	echo "ERROR: REGISTER MISMATCH FOR ${operands[@]}" >&2
+	exit 1
+    fi
+
     # register to register
-    if is_register ${operands[0]} && is_register ${operands[1]}; then
+    if $op0_is_register && $op1_is_register; then
 	local prefix=''
-	local size_op0=`size_of_register ${operands[0]}`
-	local size_op1=`size_of_register ${operands[1]}`
-	if [[ $size_op0 != $size_op1 ]]; then
-	    echo "ERROR: REGISTER MISMATCH FOR ${operands[@]}" >&2
-	    exit 1
-	fi
 	
 	
 	if needs_rex_prefix ${operands[@]}; then
@@ -835,18 +840,6 @@ function encode_modrm() {
     # REG == register_encode operand1
     # R/M == register_encode operand2
     
-    local pattern='(^\s*(\[.*\])\s*$)|(^\s*([0-9]+)\s*$)|(^\s*(AL|CL|DL|BL|AH|S[PI]L|CH|B[PI]L|D[HI]L|R[8-9]?[LBWD]?|XMM[0-9]+|YMM[0-9]+|ES|CS|SS|DS|FS|GS|CR[0-9]+|DR[0-9]+)\s*$)'
-    if [[ $operands =~ $pattern ]]; then
-	if [[ ${BASH_REMATCH[2]} ]]; then
-	    modrm+="10"
-	elif [[ ${BASH_REMATCH[4]} ]]; then
-	    modrm+="10"
-	elif [[ ${BASH_REMATCH[6]} ]]; then
-	    modrm+="00"
-	fi
-    fi
-
-    echo "MOD field: $modfield"
 }
 
 # Takes label name as parameter, finds the org address. then increments the number based on how many bytes passed up until that label.
@@ -1042,8 +1035,43 @@ function first_pass() {
     tokenize line_array
 }
 
-# function second_pass() {
-# }
+
+# Assembly pass, note memory requirements and assign preliminary addresses to labels.
+function second_pass() {
+    local byte_count=0
+    for ((i = 0; i < ${#line_array[@]}; i++)); do
+	local tokens=(`get_tokens ${line_array[i]}`)
+	case "${tokens[0]}" in
+	    db)
+		byte_count=$(( $byte_count + 0x1 ))
+		continue ;;
+	    dw)
+		byte_count=$(( $byte_count + 0x2 ))
+		continue ;;
+	    dd)
+		byte_count=$(( $byte_count + 0x4 ))
+		continue ;;
+	    dq)
+		byte_count=$(( $byte_count + 0x8 ))
+		continue ;;
+	    syscall)
+		local inst=(`syscall`)
+		byte_count=$(( $byte_count + ${#inst[@]} ))
+		continue ;;
+	    xor)
+		local inst=(`xor ${tokens[@]:1}`)
+		byte_count=$(( $byte_count + ${#inst[@]} ))		
+		continue ;;
+	    dec)
+		inst=(`dec ${tokens[1]}`)
+		byte_count=$(( $byte_count + ${#inst[@]} ))		
+		continue ;;
+		
+	esac
+    done
+    
+    echo $byte_count
+}
 
 function main() {
     first_pass
@@ -1233,6 +1261,7 @@ function main() {
 }
 
 #first_pass
+#second_pass
 main
 for line in "${line_array[@]}"; do
    echo "$line"
