@@ -824,12 +824,64 @@ function encode_opcode() {
     echo `$instruction $@`
 }
 
+function encode_sib() {
+    local scale=$1
+    local index=$2
+    local base=$3
+
+    local bits=''
+    case $scale in
+	1)
+	    bits+='00' ;;
+	2)
+	    bits+='01' ;;
+	4)
+	    bits+='10' ;;
+	8)
+	    bits+='11' ;;
+	*)
+	    echo "ERROR: UNKNOWN INSTRUCTION: JMP $op1" >&2
+	    exit 1 ;;
+    esac
+
+    local reg_code=`encode_register $index`
+    local binary=`hex_to_binary $reg_code`
+    bits+="${binary:5}"
+    reg_code=`encode_register $base`
+    binary=`hex_to_binary $reg_code`
+    bits+="${binary:5}"
+
+    echo "${bits[@]}"
+    printf "%02X" "$((2#$bits))"  
+}
+
+encode_sib 1 'rsp' 'rdx'
+echo
+
 function encode_modrm() {
-    local instruction=$1
-    shift
+    # Currently Supported
+    # Register/Memory (direct addressing Mod 11)
+    # [ SIB ] (RSP register with Mod 00)
+    # [ SIB + 8bit ] (RSP register with Mod 01)
+    # [ SIB + 32bit ] (RSP register with Mod 10)
+    
     local operands="$@"
+
+    # TODO: extract registers from [ reg + disp8/disp32 ]
+
     local modrm=""
 
+    local rsp_code=`encode_register 'rsp'`
+
+
+    # Extracts contents inside of [ ... ]
+    local token=''
+    if [[ $operands =~ \[([^\]]+)\] ]]; then
+	token=${BASH_REMATCH[1]}
+    fi
+    echo $token
+    
+    
     # TODO: implement this
     # if any operand contains [register/memory + disp]
     # if disp is less than 128 MOD must == 01
@@ -842,6 +894,7 @@ function encode_modrm() {
     
 }
 
+encode_modrm "mov rdi [ rsp + 16 ]"
 # Takes label name as parameter, finds the org address. then increments the number based on how many bytes passed up until that label.
 # returns the address
 function calculate_label_address() {
@@ -1260,9 +1313,9 @@ function main() {
     chmod +x a.out
 }
 
-#first_pass
-#second_pass
-main
+first_pass
+second_pass
+#main
 for line in "${line_array[@]}"; do
    echo "$line"
 done
